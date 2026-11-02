@@ -58,6 +58,27 @@ func TestEnvOverridesAPIKey(t *testing.T) {
 	}
 }
 
+func TestEnvOverridesClassifierBaseURL(t *testing.T) {
+	t.Setenv("ACMEAI_BASE_URL", "https://api-testing.acmeai.vn/")
+	loaded, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Classifier.BaseURL != "https://api-testing.acmeai.vn" {
+		t.Fatalf("got %q", loaded.Classifier.BaseURL)
+	}
+}
+
+func TestTestingExampleConfigLoads(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "config.testing.example.yaml"))
+	if err != nil {
+		t.Fatalf("config.testing.example.yaml is invalid: %v", err)
+	}
+	if cfg.Classifier.BaseURL != "https://api-testing.acmeai.vn" {
+		t.Fatalf("classifier base URL = %q", cfg.Classifier.BaseURL)
+	}
+}
+
 func TestExampleConfigLoads(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "config.example.yaml"))
 	if err != nil {
@@ -69,5 +90,47 @@ func TestExampleConfigLoads(t *testing.T) {
 				t.Fatalf("config.example.yaml is missing %s/%s", profile, tier)
 			}
 		}
+	}
+}
+
+// Saving unrelated settings must not bake an environment override into the file.
+func TestUpdateDoesNotPersistEnvOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	manager, err := LoadManager(path)
+	if err != nil {
+		t.Fatalf("LoadManager: %v", err)
+	}
+	t.Setenv("ACMEAI_API_KEY", "env-key")
+	t.Setenv("ACMEAI_BASE_URL", "https://api-testing.acmeai.vn")
+
+	cfg := manager.Snapshot()
+	cfg.Classifier.TimeoutMS = 9000
+	if err := manager.Update(cfg); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	saved, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+	if saved.Classifier.APIKey != "env-key" {
+		t.Fatalf("runtime API key = %q", saved.Classifier.APIKey)
+	}
+	if saved.Classifier.TimeoutMS != 9000 {
+		t.Fatalf("saved timeout = %d", saved.Classifier.TimeoutMS)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if strings.Contains(string(raw), "env-key") {
+		t.Fatal("environment API key was written to the config file")
+	}
+	if strings.Contains(string(raw), "api-testing.acmeai.vn") {
+		t.Fatal("environment base URL was written to the config file")
+	}
+	if !strings.Contains(string(raw), "timeout_ms: 9000") {
+		t.Fatalf("edited field missing from file:\n%s", raw)
 	}
 }

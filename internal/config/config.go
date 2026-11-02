@@ -165,6 +165,9 @@ func applyEnv(cfg *Config) {
 	if key := strings.TrimSpace(os.Getenv("ACMEAI_API_KEY")); key != "" {
 		cfg.Classifier.APIKey = key
 	}
+	if baseURL := strings.TrimSpace(os.Getenv("ACMEAI_BASE_URL")); baseURL != "" {
+		cfg.Classifier.BaseURL = strings.TrimRight(baseURL, "/")
+	}
 }
 
 func (c Config) Validate() error {
@@ -325,6 +328,11 @@ func (m *Manager) Update(cfg Config) error {
 	// environment secret into a file just because the user saved another field.
 	if strings.TrimSpace(os.Getenv("ACMEAI_API_KEY")) != "" {
 		persist.Classifier.APIKey = ""
+	}
+	// ACMEAI_BASE_URL is the same kind of override: keep the file neutral so a
+	// testing URL never gets baked in by an unrelated settings save.
+	if strings.TrimSpace(os.Getenv("ACMEAI_BASE_URL")) != "" {
+		persist.Classifier.BaseURL = Default().Classifier.BaseURL
 	}
 	if err := Save(m.path, persist); err != nil {
 		return err

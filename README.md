@@ -204,6 +204,19 @@ If you choose not to modify a host, SMR still runs and the other host can use it
 
 ## Configuration
 
+### Testing environment
+
+Use `https://api-testing.acmeai.vn` and an API key created on
+`https://llm-testing.acmeai.vn`. Do not reuse a production key.
+
+    classifier:
+      base_url: "https://api-testing.acmeai.vn"
+      api_key: "acme_sk_testing_key"
+
+`ACMEAI_BASE_URL` overrides `classifier.base_url` without editing the file.
+`config.testing.example.yaml` is a complete testing starting point, and
+`docs/TESTING.md` lists the verification steps and exit criteria.
+
 Default locations:
 
 | OS | Config |
