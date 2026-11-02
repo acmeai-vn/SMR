@@ -1,6 +1,6 @@
 {
   "name": "smart-model-router",
-  "version": "0.1.0",
+  "version": "0.1.8",
   "description": "Install and operate the SMR local routing daemon for Codex and Claude Code.",
   "author": {
     "name": "ACME AI",
