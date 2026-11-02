@@ -170,6 +170,35 @@ func TestTestingPageLabelsDashboard(t *testing.T) {
 	}
 }
 
+func TestSavedKeyDashboardLinkOmitsProductionLabel(t *testing.T) {
+	_, manager, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	cfg := manager.Snapshot()
+	cfg.Classifier.APIKey = "test-key"
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `>Mở dashboard ↗</a>`) {
+		t.Fatalf("production link should read like the button:\n%s", body)
+	}
+	if strings.Contains(body, "Production dashboard") {
+		t.Fatalf("production link must not mention Production:\n%s", body)
+	}
+
+	cfg = manager.Snapshot()
+	cfg.Classifier.BaseURL = "https://api-testing.acmeai.vn"
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+	body = getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `>Testing dashboard ↗</a>`) {
+		t.Fatalf("testing link should keep the environment label:\n%s", body)
+	}
+}
+
 func TestDefaultLanguageIsVietnamese(t *testing.T) {
 	_, _, server, client, _ := testUI(t)
 	authenticate(t, client, server.URL)

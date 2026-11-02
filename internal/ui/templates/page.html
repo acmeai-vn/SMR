@@ -54,7 +54,7 @@
   </div>
 
   {{if .Config.Classifier.APIKey}}
-  <p class="hint key-hint">{{t .Lang "step1.rotate"}} <a class="inline-link" href="{{.DashboardURL}}/keys" target="_blank" rel="noopener noreferrer">{{if .EnvironmentLabel}}{{.EnvironmentLabel}} {{end}}dashboard ↗</a></p>
+  <p class="hint key-hint">{{t .Lang "step1.rotate"}} <a class="inline-link" href="{{.DashboardURL}}/keys" target="_blank" rel="noopener noreferrer">{{if .EnvironmentLabel}}{{.EnvironmentLabel}} dashboard{{else}}{{t .Lang "step1.callout.cta"}}{{end}} ↗</a></p>
   {{else}}
   <div class="callout">
     <div class="callout-text">
