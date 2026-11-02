@@ -96,6 +96,32 @@ If creating the release manually:
 
 Upload all files in one operation. Do not edit an asset after publication; publish a new patch release instead.
 
+## Testing channel
+
+A build that is still being verified is published as a GitHub pre-release, so
+`/releases/latest` keeps serving the previous stable version:
+
+    git tag -a v0.1.9 -m "SMR v0.1.9 (testing)"
+    git push origin v0.1.9
+    gh release edit v0.1.9 --prerelease
+
+The release workflow creates the release and its assets; the `--prerelease` edit
+keeps it out of automatic updates. Testers install it explicitly:
+
+    smr update --version v0.1.9
+    sh install.sh --version v0.1.9
+
+`smr update --check` still reports the previous stable version, which is the
+expected result on the testing channel.
+
+Promote the same tag to production by clearing the flag. This keeps the tag and
+its assets immutable, as the rollback rules require:
+
+    gh release edit v0.1.9 --prerelease=false --latest
+
+Only promote after the checklist in `docs/TESTING.md` passes against
+`https://api-testing.acmeai.vn` and `https://llm-testing.acmeai.vn`.
+
 ## Verify a release before announcing
 
 1. Check the manifest and checksum files exist in the release.
