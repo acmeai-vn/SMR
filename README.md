@@ -61,7 +61,9 @@ Install without opening the setup page:
 
 ### Windows
 
-Run PowerShell as your normal user. Administrator rights are required only if your organization policy blocks per-user scheduled tasks.
+Run PowerShell as your normal user. No administrator rights are required. When a machine denies
+scheduled-task creation, the installer falls back to a per-user `HKCU\...\Run` entry, which
+starts SMR at logon the same way.
 
     irm https://raw.githubusercontent.com/acmeai-vn/SMR/main/install.ps1 | iex
 
@@ -86,7 +88,7 @@ Install without opening the setup page:
    - Linux: `~/.local/share/acmeai/smr/smr`
 5. On macOS/Linux, creates `~/.local/bin/smr` as a symlink. It never overwrites a regular file with that name.
 6. Registers a per-user background service:
-   - Windows: Task Scheduler at logon.
+   - Windows: Task Scheduler at logon, or the per-user Run entry when task creation is denied.
    - macOS: LaunchAgent `vn.acmeai.smr`.
    - Linux: `systemd --user` unit `smr.service`.
 7. Starts SMR on `127.0.0.1:8787` and its local UI on `127.0.0.1:8788`.
@@ -310,7 +312,9 @@ Common cases:
 - **Installer cannot find a release:** check that a tag and its release assets exist on GitHub Releases, then retry without `--version`.
 - **Installer checksum mismatch:** do not run the archive. Delete it and download again; report the release tag and asset name privately.
 - **macOS Gatekeeper blocks the binary:** phase 1 releases are not signed or notarized. Verify the checksum and follow the published install instructions. Signing is out of scope for phase 1.
-- **Windows scheduled task blocked by policy:** ask your administrator, or run `smr serve` manually from a terminal.
+- **Windows scheduled task blocked by policy:** the installer already falls back to a per-user
+  `HKCU\...\Run` entry, so no action is needed. If autostart is blocked entirely, run
+  `smr serve` manually from a terminal.
 
 ## Uninstall
 

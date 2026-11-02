@@ -159,11 +159,34 @@ try {
 
     if (-not $NoService) {
         Step "Registering the per-user background task..."
-        $action = New-ScheduledTaskAction -Execute $binary -Argument "serve" -WorkingDirectory $installDir
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "Smart Model Router local daemon" -Force | Out-Null
-        Start-ScheduledTask -TaskName $taskName
+        $registered = $false
+        try {
+            $action = New-ScheduledTaskAction -Execute $binary -Argument "serve" -WorkingDirectory $installDir
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "Smart Model Router local daemon" -Force | Out-Null
+            Start-ScheduledTask -TaskName $taskName
+            $registered = $true
+        } catch {
+            Write-Warning "Scheduled task registration was denied: $($_.Exception.Message)"
+        }
+
+        if (-not $registered) {
+            # Some machines deny task creation to non-elevated users. SMR still
+            # installs without administrator rights, so fall back to the
+            # per-user Run entry that Windows expands at every logon.
+            Step "Falling back to per-user autostart (HKCU Run)..."
+            $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+            if (-not (Test-Path -LiteralPath $runKey)) {
+                New-Item -Path $runKey -Force | Out-Null
+            }
+            Set-ItemProperty -LiteralPath $runKey -Name $taskName -Value ('"' + $binary + '" serve')
+
+            Get-CimInstance Win32_Process -Filter "Name='smr.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match '\bserve\s*$' } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Process -FilePath $binary -ArgumentList "serve" -WindowStyle Hidden
+        }
 
         Step "Waiting for SMR to become healthy..."
         $ready = $false

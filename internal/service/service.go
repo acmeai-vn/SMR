@@ -19,8 +19,12 @@ import (
 
 const (
 	windowsTask = "AcmeAI SMR"
-	macLabel    = "vn.acmeai.smr"
-	linuxUnit   = "smr.service"
+	// windowsRunKey is the per-user autostart fallback. Some machines deny
+	// scheduled-task creation to non-elevated users, and the installers promise
+	// no administrator rights are needed.
+	windowsRunKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	macLabel      = "vn.acmeai.smr"
+	linuxUnit     = "smr.service"
 )
 
 type Health struct {
@@ -58,7 +62,12 @@ func Restart(ctx context.Context) error {
 	switch runtime.GOOS {
 	case "windows":
 		_ = run(ctx, "schtasks", "/End", "/TN", windowsTask)
-		return run(ctx, "schtasks", "/Run", "/TN", windowsTask)
+		if err := run(ctx, "schtasks", "/Run", "/TN", windowsTask); err == nil {
+			return nil
+		}
+		// Fall back to the per-user Run entry used when task registration was
+		// denied. The helper restarts the daemon in place.
+		return runDetachedServe(ctx)
 	case "darwin":
 		return run(ctx, "launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(os.Getuid())+"/"+macLabel)
 	default:
@@ -70,7 +79,15 @@ func Uninstall(ctx context.Context) error {
 	switch runtime.GOOS {
 	case "windows":
 		_ = run(ctx, "schtasks", "/End", "/TN", windowsTask)
-		return run(ctx, "schtasks", "/Delete", "/TN", windowsTask, "/F")
+		taskErr := run(ctx, "schtasks", "/Delete", "/TN", windowsTask, "/F")
+		_ = run(ctx, "taskkill", "/IM", "smr.exe", "/F")
+		runErr := run(ctx, "reg", "delete", windowsRunKey, "/v", windowsTask, "/f")
+		// Removing either autostart mechanism counts as success; the other one
+		// was simply never installed.
+		if taskErr == nil || runErr == nil {
+			return nil
+		}
+		return taskErr
 	case "darwin":
 		_ = run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/"+macLabel)
 		home, err := os.UserHomeDir()
@@ -110,6 +127,28 @@ func OpenBrowser(ctx context.Context, target string) error {
 	default:
 		return run(ctx, "xdg-open", target)
 	}
+}
+
+// stopServeScript matches only the background daemon. The CLI that calls
+// restart runs with a different final argument, so this never kills itself.
+const stopServeScript = `Get-CimInstance Win32_Process -Filter "Name='smr.exe'" | Where-Object { $_.CommandLine -match '\bserve\s*$' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`
+
+// runDetachedServe stops the current daemon and starts a detached one. It is
+// the restart path when the machine never allowed a scheduled task to be
+// registered, so there is no task for schtasks to restart.
+func runDetachedServe(ctx context.Context) error {
+	_ = run(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", stopServeScript)
+
+	binary, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	command := exec.Command(binary, "serve")
+	command.SysProcAttr = detachedSysProcAttr()
+	if err := command.Start(); err != nil {
+		return err
+	}
+	return command.Process.Release()
 }
 
 func run(ctx context.Context, name string, args ...string) error {
