@@ -101,6 +101,17 @@ var messages = map[string]message{
 	"footer.loopback": {"Chỉ bind loopback. Kết nối LAN bị từ chối.", "Bound to loopback only; LAN connections are refused."},
 	"footer.no_log":   {"Không log prompt, API key hoặc token.", "Never logs prompts, API keys or tokens."},
 
+	"locked.title":    {"Cần mã truy cập", "Access token required"},
+	"locked.lead":     {"SMR chỉ mở trang cấu hình qua lệnh trong terminal. Nhờ vậy một trang web khác không thể đổi cấu hình hay đọc API key trên máy bạn.", "SMR opens this page only from a terminal command. That keeps other websites from changing your config or reading the API key on this machine."},
+	"locked.step1":    {"Mở Terminal (PowerShell, Terminal.app hoặc shell).", "Open a terminal (PowerShell, Terminal.app or a shell)."},
+	"locked.step2":    {"Chạy lệnh:", "Run this command:"},
+	"locked.step3":    {"Trình duyệt tự mở trang cấu hình kèm mã truy cập.", "The browser opens the setup page with the access token."},
+	"locked.copy":     {"Sao chép", "Copy"},
+	"locked.copied":   {"Đã sao chép", "Copied"},
+	"locked.invalid":  {"Mã truy cập không đúng hoặc đã hết hiệu lực. Chạy lại lệnh dưới đây để lấy mã mới.", "The access token is wrong or expired. Run the command below to get a new one."},
+	"locked.manual":   {"Nếu trình duyệt không tự mở, terminal in ra URL đầy đủ. Mã cũng được lưu trong %s và chỉ tài khoản của bạn đọc được.", "If the browser does not open, the terminal prints the full URL. The token is also stored in %s, readable by your account only."},
+	"locked.footnote": {"Bạn đang mở http://%s trực tiếp nên chưa có mã.", "You opened http://%s directly, so no token was sent."},
+
 	"tier.easy":         {"Dễ", "Easy"},
 	"tier.lower_medium": {"Trung bình thấp", "Lower medium"},
 	"tier.upper_medium": {"Trung bình cao", "Upper medium"},

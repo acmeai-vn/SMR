@@ -160,6 +160,11 @@ Then invoke the SMR skill and follow its setup flow. Restart Claude Code after S
 
 The setup page is a four-step flow:
 
+Opening `http://127.0.0.1:8798` by hand shows a short page explaining that the
+setup UI needs the token printed by `smr setup`. That is intentional: a random
+website in your browser must not be able to rewrite the local SMR config. If the
+daemon is not running, `smr setup` starts it before opening the browser.
+
 1. **Kết nối ACME AI** — the classifier base URL and your ACME AI API key
    (`acme_sk_...`). If you do not have a key yet, the page links to the dashboard
    for your environment (`llm.acmeai.vn`, or `llm-testing.acmeai.vn` when the base

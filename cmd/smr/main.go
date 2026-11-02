@@ -181,7 +181,15 @@ func runSetup(ctx context.Context) error {
 		return err
 	}
 	if _, err := service.HealthCheck(ctx, "http://"+cfg.Listen); err != nil {
-		return fmt.Errorf("SMR is not running; start the background service or run `smr serve` first")
+		// The daemon may have been stopped by a reboot, a crash or an update.
+		// Starting it here keeps `smr setup` a single command for the user.
+		fmt.Println("SMR is not running; starting it in the background...")
+		if err := service.StartBackground(); err != nil {
+			return fmt.Errorf("start SMR: %w", err)
+		}
+		if err := waitForHealth(ctx, "http://"+cfg.Listen, 20*time.Second); err != nil {
+			return fmt.Errorf("SMR did not become ready: %w", err)
+		}
 	}
 	token, err := ui.ReadTokenFile(dataDir)
 	if err != nil {
@@ -193,6 +201,26 @@ func runSetup(ctx context.Context) error {
 		fmt.Println("Open this URL manually:", target)
 	}
 	return nil
+}
+
+// waitForHealth polls the daemon until it answers or the deadline passes. The
+// daemon needs a moment to bind both ports after it is started.
+func waitForHealth(ctx context.Context, baseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if _, err := service.HealthCheck(ctx, baseURL); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return lastErr
 }
 
 func runStatus(ctx context.Context) error {

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMR Setup · ACME AI</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/static/acme-ai-logo-square.png">
+<link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img class="logo" src="/static/acme-ai-logo-square.png" alt="ACME AI" width="54" height="54">
+    <div>
+      <span class="eyebrow">ACME AI</span>
+      <h1>Smart Model Router</h1>
+      <p class="muted">{{t .Lang "header.local"}} · <span class="mono">{{.Version}}</span></p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <div class="lang" role="group" aria-label="Language / Ngôn ngữ">
+      <a class="lang-opt{{if eq .Lang "vi"}} active{{end}}" href="{{.LangURLVI}}" hreflang="vi" lang="vi">VI</a>
+      <a class="lang-opt{{if eq .Lang "en"}} active{{end}}" href="{{.LangURLEN}}" hreflang="en" lang="en">EN</a>
+    </div>
+  </div>
+</header>
+
+<main>
+<section class="card locked">
+  <div class="locked-badge" aria-hidden="true">🔒</div>
+  <h2>{{t .Lang "locked.title"}}</h2>
+  <p class="locked-lead">{{t .Lang "locked.lead"}}</p>
+
+  {{if .Invalid}}<div class="notice error" role="alert">{{t .Lang "locked.invalid"}}</div>{{end}}
+
+  <ol class="mini-steps locked-steps">
+    <li>{{t .Lang "locked.step1"}}</li>
+    <li>{{t .Lang "locked.step2"}}
+      <div class="locked-command">
+        <code class="mono">smr setup</code>
+        <button class="btn" type="button" data-copy="smr setup" data-copied="{{t .Lang "locked.copied"}}">{{t .Lang "locked.copy"}}</button>
+      </div>
+    </li>
+    <li>{{t .Lang "locked.step3"}}</li>
+  </ol>
+
+  <p class="hint">{{tf .Lang "locked.manual" .TokenPath}}</p>
+  <p class="hint">{{tf .Lang "locked.footnote" .UIHost}}</p>
+</section>
+</main>
+
+<footer><span>{{t .Lang "footer.loopback"}}</span></footer>
+
+<script src="/static/copy.js" defer></script>
+</body>
+</html>

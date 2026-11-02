@@ -161,12 +161,27 @@ const stopServeScript = `Get-CimInstance Win32_Process -Filter "Name='smr.exe'" 
 func runDetachedServe(ctx context.Context) error {
 	_ = run(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", stopServeScript)
 
+	return StartBackground()
+}
+
+// StartBackground launches the daemon detached from the current terminal. The
+// binary keeps its own log file, so the parent can discard stdio and exit
+// immediately; `smr setup` uses this when the user has no autostart entry yet.
+func StartBackground() error {
 	binary, err := os.Executable()
 	if err != nil {
 		return err
 	}
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer null.Close()
 	command := exec.Command(binary, "serve", "--background")
 	command.SysProcAttr = detachedSysProcAttr()
+	command.Stdin = nil
+	command.Stdout = null
+	command.Stderr = null
 	if err := command.Start(); err != nil {
 		return err
 	}

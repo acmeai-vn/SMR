@@ -129,6 +129,18 @@ type logsData struct {
 	LangURLEN string
 }
 
+// lockedData renders the page shown when someone opens the setup UI without
+// the token, for example by typing http://127.0.0.1:8798 into the address bar.
+type lockedData struct {
+	Lang      string
+	LangURLVI string
+	LangURLEN string
+	Version   string
+	TokenPath string
+	UIHost    string
+	Invalid   bool
+}
+
 func New(manager *config.Manager, stats func() proxy.Stats, dataDir, token, version string, logger *slog.Logger) (*Server, error) {
 	csrf, err := GenerateToken()
 	if err != nil {
@@ -158,7 +170,11 @@ func New(manager *config.Manager, stats func() proxy.Stats, dataDir, token, vers
 	if err != nil {
 		return nil, err
 	}
-	server.pages = map[string]*template.Template{"page": page, "logs": logs}
+	locked, err := template.New("locked.html").Funcs(functions).ParseFS(embedded, "templates/locked.html")
+	if err != nil {
+		return nil, err
+	}
+	server.pages = map[string]*template.Template{"page": page, "logs": logs, "locked": locked}
 	staticFS, err := fs.Sub(embedded, "static")
 	if err != nil {
 		return nil, err
@@ -203,12 +219,12 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 				http.Redirect(w, r, target, http.StatusSeeOther)
 				return
 			}
-			http.Error(w, "Invalid setup token.", http.StatusUnauthorized)
+			s.renderLocked(w, r, true)
 			return
 		}
 		cookie, err := r.Cookie(tokenCookie)
 		if err != nil || !equal(cookie.Value, s.token) {
-			http.Error(w, "Setup token required. Run `smr setup` from a terminal.", http.StatusUnauthorized)
+			s.renderLocked(w, r, false)
 			return
 		}
 		next(w, r)
@@ -608,13 +624,29 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, value an
 	}
 }
 
+// renderLocked explains how to authenticate instead of returning a bare error.
+// Opening http://127.0.0.1:8798 by hand used to print a one-line 401 that gave
+// no hint about where to run the command.
+func (s *Server) renderLocked(w http.ResponseWriter, r *http.Request, invalid bool) {
+	lang := s.language(w, r)
+	s.render(w, http.StatusUnauthorized, "locked", lockedData{
+		Lang:      lang,
+		LangURLVI: "/?lang=" + langVI,
+		LangURLEN: "/?lang=" + langEN,
+		Version:   s.version,
+		TokenPath: filepath.Join(s.dataDir, tokenFile),
+		UIHost:    r.Host,
+		Invalid:   invalid,
+	})
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }

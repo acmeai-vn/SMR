@@ -164,6 +164,17 @@ input:focus-visible, select:focus-visible { outline: 2px solid color-mix(in srgb
 
 footer { display: flex; justify-content: space-between; gap: 16px; padding: 4px 0 34px; color: var(--muted); font-size: 11px; }
 
+/* Locked page: shown when the setup UI is opened without a token. */
+.card.locked { max-width: 620px; margin: 8px auto 0; padding: 26px 26px 22px; }
+.locked-badge { display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 12px; border-radius: 50%; background: var(--accent-soft); font-size: 18px; }
+.card.locked h2 { margin: 0 0 6px; font-size: 19px; }
+.locked-lead { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.locked-steps { padding-left: 20px; color: var(--ink); font-size: 13px; }
+.locked-steps li { margin-bottom: 10px; }
+.locked-command { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 9px 12px; border: 1px dashed var(--line-strong); border-radius: 5px; background: var(--bg); }
+.locked-command code { font-family: var(--mono); font-size: 13px; }
+.card.locked .hint { margin-top: 8px; }
+
 @media (max-width: 860px) {
   .grid.status { grid-template-columns: 1fr 1fr; }
   .tier-head { display: none; }

@@ -151,6 +151,93 @@ func TestPageLinksToDashboardWithoutKey(t *testing.T) {
 	}
 }
 
+func TestLockedPageExplainsHowToGetToken(t *testing.T) {
+	_, _, server, _, _ := testUI(t)
+
+	resp, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if strings.Contains(body, "Setup token required") {
+		t.Fatalf("bare error text still rendered:\n%s", body)
+	}
+	for _, want := range []string{"Cần mã truy cập", "smr setup", `data-copy="smr setup"`, "/static/copy.js"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("locked page missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Mã truy cập không đúng") {
+		t.Fatalf("missing-token page must not claim the token is invalid")
+	}
+}
+
+func TestLockedPageFollowsLanguage(t *testing.T) {
+	_, _, server, _, _ := testUI(t)
+
+	resp, err := http.Get(server.URL + "/?lang=en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `<html lang="en">`) || !strings.Contains(body, "Access token required") {
+		t.Fatalf("English locked page missing:\n%s", body)
+	}
+	if strings.Contains(body, "Cần mã truy cập") {
+		t.Fatalf("Vietnamese copy leaked into the English page")
+	}
+}
+
+func TestInvalidTokenExplainsExpiry(t *testing.T) {
+	_, _, server, _, _ := testUI(t)
+
+	resp, err := http.Get(server.URL + "/?token=wrong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "Mã truy cập không đúng hoặc đã hết hiệu lực") {
+		t.Fatalf("invalid-token hint missing:\n%s", body)
+	}
+}
+
+func TestCopyScriptIsServedUnderCSP(t *testing.T) {
+	_, _, server, _, _ := testUI(t)
+
+	resp, err := http.Get(server.URL + "/static/copy.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("copy.js status=%d", resp.StatusCode)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
+		t.Fatalf("CSP blocks the copy script: %q", csp)
+	}
+}
+
 func TestTestingPageLabelsDashboard(t *testing.T) {
 	_, manager, server, client, _ := testUI(t)
 	authenticate(t, client, server.URL)
