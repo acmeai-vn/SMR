@@ -40,7 +40,7 @@
   <rect class="frame" x="0.5" y="0.5" width="479" height="239" rx="8"/>
 
   <text class="eyebrow" x="18" y="22">CODING AGENT</text>
-  <text class="eyebrow" x="462" y="22" text-anchor="end">4 TIERS → MODEL</text>
+  <text class="eyebrow" x="462" y="18" text-anchor="end">4 TIERS → MODEL</text>
 
   <!-- source -->
   <g>
