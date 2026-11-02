@@ -34,3 +34,6 @@ go.work.sum
 
 # Release output
 dist/
+
+# Local build and screenshot scratch space
+dist-test/

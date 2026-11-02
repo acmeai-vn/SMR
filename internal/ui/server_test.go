@@ -64,8 +64,164 @@ func TestRequiresTokenAndSetsCookie(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Profile claude") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `id="tab-claude"`) || !strings.Contains(string(body), `id="step-3"`) {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+}
+
+func TestProfileTabsAndStepNavigation(t *testing.T) {
+	_, _, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	body := getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `id="tab-codex"`) || !strings.Contains(body, `id="tab-claude"`) {
+		t.Fatalf("missing profile tabs:\n%s", body)
+	}
+	if strings.Count(body, " checked>") != 1 || !strings.Contains(body, `id="tab-codex" value="codex" checked>`) {
+		t.Fatalf("expected exactly one checked tab, codex first:\n%s", body)
+	}
+	for _, step := range []string{"step-1", "step-2", "step-3", "step-4"} {
+		if !strings.Contains(body, `id="`+step+`"`) {
+			t.Fatalf("missing %s", step)
+		}
+	}
+
+	body = getBody(t, client, server.URL+"/?tab=claude")
+	if !strings.Contains(body, `id="tab-claude" value="claude" checked>`) {
+		t.Fatalf("claude tab not selected:\n%s", body)
+	}
+	if strings.Contains(body, `id="tab-codex" value="codex" checked>`) {
+		t.Fatalf("codex tab should no longer be selected:\n%s", body)
+	}
+}
+
+func getBody(t *testing.T, client *http.Client, target string) string {
+	t.Helper()
+	resp, err := client.Get(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	return string(body)
+}
+
+func TestDashboardLinkFollowsEnvironment(t *testing.T) {
+	cases := map[string]string{
+		"https://api-testing.acmeai.vn": "https://llm-testing.acmeai.vn",
+		"https://api.acmeai.vn":         "https://llm.acmeai.vn",
+		"":                              "https://llm.acmeai.vn",
+		"https://api.example.com":       "https://llm.acmeai.vn",
+	}
+	for baseURL, want := range cases {
+		if got, _ := dashboardFor(baseURL); got != want {
+			t.Fatalf("dashboardFor(%q)=%q, want %q", baseURL, got, want)
+		}
+	}
+	if _, label := dashboardFor("https://api-testing.acmeai.vn"); label != "Testing" {
+		t.Fatalf("testing label=%q", label)
+	}
+}
+
+func TestPageLinksToDashboardWithoutKey(t *testing.T) {
+	_, _, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	body := getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `href="https://llm.acmeai.vn"`) {
+		t.Fatalf("missing dashboard link:\n%s", body)
+	}
+	if !strings.Contains(body, `target="_blank" rel="noopener noreferrer"`) {
+		t.Fatalf("dashboard link must open in a new tab")
+	}
+	if !strings.Contains(body, "Nạp tiền") || !strings.Contains(body, "Tạo API key") {
+		t.Fatalf("signup steps missing")
+	}
+}
+
+func TestDefaultLanguageIsVietnamese(t *testing.T) {
+	_, _, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	body := getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `<html lang="vi">`) {
+		t.Fatalf("expected Vietnamese by default:\n%s", body)
+	}
+	if !strings.Contains(body, "Kết nối ACME AI") || !strings.Contains(body, ">VI</a>") {
+		t.Fatalf("Vietnamese copy or language switcher missing")
+	}
+}
+
+func TestLanguageSwitchIsRemembered(t *testing.T) {
+	_, _, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	body := getBody(t, client, server.URL+"/?lang=en")
+	if !strings.Contains(body, `<html lang="en">`) || !strings.Contains(body, "Connect to ACME AI") {
+		t.Fatalf("English page missing:\n%s", body)
+	}
+	if strings.Contains(body, "Kết nối ACME AI") {
+		t.Fatalf("Vietnamese copy leaked into the English page")
+	}
+
+	// The choice is stored in a cookie, so a later URL without ?lang stays English.
+	body = getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `<html lang="en">`) || !strings.Contains(body, "Models per tier") {
+		t.Fatalf("language cookie not remembered:\n%s", body)
+	}
+
+	body = getBody(t, client, server.URL+"/?lang=vi")
+	if !strings.Contains(body, `<html lang="vi">`) {
+		t.Fatalf("switching back to Vietnamese failed")
+	}
+}
+
+func TestTokenRedirectKeepsLanguage(t *testing.T) {
+	_, _, server, client, _ := testUI(t)
+	resp, err := client.Get(server.URL + "/?token=setup-token&lang=en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Request.URL.String(); !strings.Contains(got, "lang=en") {
+		t.Fatalf("redirect dropped the language: %s", got)
+	}
+	body := getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `<html lang="en">`) {
+		t.Fatalf("language not remembered after token redirect:\n%s", body)
+	}
+}
+
+func TestEnglishPageHasSameStructure(t *testing.T) {
+	_, _, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	body := getBody(t, client, server.URL+"/?lang=en")
+	for _, want := range []string{`id="step-1"`, `id="step-2"`, `id="step-3"`, `id="step-4"`, `id="tab-codex"`, `id="tab-claude"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("English page is missing %s", want)
+		}
+	}
+	if !strings.Contains(body, "Save configuration") || !strings.Contains(body, "Open dashboard") {
+		t.Fatalf("English actions missing")
+	}
+}
+
+func TestTranslateNoteCodes(t *testing.T) {
+	if got := translateNote(langEN, "codex.env_key:OPENAI_API_KEY"); !strings.Contains(got, "OPENAI_API_KEY") {
+		t.Fatalf("argument lost: %q", got)
+	}
+	if got := translateNote(langVI, "codex.no_config"); strings.HasPrefix(got, "note.") {
+		t.Fatalf("note code not translated: %q", got)
+	}
+	if got := translateNote(langVI, "future.note:value"); got != "future.note:value" {
+		t.Fatalf("unknown note should pass through, got %q", got)
 	}
 }
 

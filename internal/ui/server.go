@@ -11,7 +11,9 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,16 +50,36 @@ type Server struct {
 }
 
 type profileView struct {
-	Name    string
-	Profile config.Profile
-	Tiers   []tierView
+	Name       string
+	Label      string
+	Profile    config.Profile
+	Tiers      []tierView
+	Active     bool
+	Configured int
+	Total      int
 }
 
 type tierView struct {
 	Name           string
+	Label          string
 	BaseURL        string
 	Model          string
 	KeyPlaceholder string
+}
+
+// hostView adds the presenter-only fields the setup page needs to a detected
+// host configuration.
+type hostView struct {
+	hostcfg.Detection
+	Label   string
+	UsesSMR bool
+}
+
+// stepView drives the step navigation at the top of the page.
+type stepView struct {
+	N     int
+	Title string
+	Done  bool
 }
 
 type testResult struct {
@@ -66,28 +88,45 @@ type testResult struct {
 	BalanceVND      int64
 	MaxStateChars   int
 	CacheTTLSeconds int64
+	// Saved reports that the tested key was new and is now stored. Testing a
+	// valid key is the moment the user expects it to be kept.
+	Saved bool
 }
 
 type pageData struct {
 	Title             string
 	Version           string
 	CSRF              string
+	Lang              string
+	LangURLVI         string
+	LangURLEN         string
 	ConfigPath        string
 	APIKeyPlaceholder string
 	Config            config.Config
 	Profiles          []profileView
-	Tiers             []string
-	Stats             proxy.Stats
-	Detections        []hostcfg.Detection
-	Change            *hostcfg.Change
-	Test              *testResult
-	Error             string
-	Notice            string
+	ActiveTab         string
+	Steps             []stepView
+	Verified          bool
+	// DashboardURL is where a new user signs up, tops up and creates the
+	// classifier key. EnvironmentLabel names it so the page never sends a
+	// testing user to production or the other way round.
+	DashboardURL     string
+	EnvironmentLabel string
+	Tiers            []string
+	Stats            proxy.Stats
+	Detections       []hostView
+	Change           *hostcfg.Change
+	Test             *testResult
+	Error            string
+	Notice           string
 }
 
 type logsData struct {
-	Path string
-	Logs string
+	Path      string
+	Logs      string
+	Lang      string
+	LangURLVI string
+	LangURLEN string
 }
 
 func New(manager *config.Manager, stats func() proxy.Stats, dataDir, token, version string, logger *slog.Logger) (*Server, error) {
@@ -105,7 +144,11 @@ func New(manager *config.Manager, stats func() proxy.Stats, dataDir, token, vers
 		logger:  logger,
 	}
 	functions := template.FuncMap{
-		"lower": strings.ToLower,
+		"lower":         strings.ToLower,
+		"t":             tr,
+		"tf":            trf,
+		"tierLabel":     tierLabel,
+		"translateNote": translateNote,
 	}
 	page, err := template.New("page.html").Funcs(functions).ParseFS(embedded, "templates/page.html")
 	if err != nil {
@@ -151,7 +194,13 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 					HttpOnly: true,
 					SameSite: http.SameSiteStrictMode,
 				})
-				http.Redirect(w, r, "/", http.StatusSeeOther)
+				// Keep the language the user asked for. Dropping it here made
+				// ?token=...&lang=en land on a Vietnamese page.
+				target := "/"
+				if lang, ok := parseLanguage(r.URL.Query().Get("lang")); ok {
+					target = "/?lang=" + lang
+				}
+				http.Redirect(w, r, target, http.StatusSeeOther)
 				return
 			}
 			http.Error(w, "Invalid setup token.", http.StatusUnauthorized)
@@ -167,60 +216,219 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	data := s.baseData()
+	lang := s.language(w, r)
+	data := s.baseData(lang)
+	if tab := r.URL.Query().Get("tab"); tab != "" {
+		data.activateTab(tab)
+	}
 	switch r.URL.Query().Get("saved") {
 	case "1":
-		data.Notice = "Đã lưu cấu hình. Daemon dùng cấu hình mới cho request tiếp theo."
+		data.Notice = tr(lang, "notice.saved")
 	}
 	if r.URL.Query().Get("applied") != "" {
-		data.Notice = "Đã cập nhật cấu hình " + r.URL.Query().Get("applied") + ". Khởi động lại host để nhận thay đổi."
+		data.Notice = trf(lang, "notice.applied", r.URL.Query().Get("applied"))
 	}
 	s.render(w, http.StatusOK, "page", data)
 }
 
-func (s *Server) baseData() pageData {
+// language resolves the page language from ?lang=, then the saved cookie, and
+// defaults to Vietnamese.
+func (s *Server) language(w http.ResponseWriter, r *http.Request) string {
+	if value, ok := parseLanguage(r.URL.Query().Get("lang")); ok {
+		http.SetCookie(w, &http.Cookie{
+			Name:     langCookie,
+			Value:    value,
+			Path:     "/",
+			MaxAge:   365 * 24 * 60 * 60,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+		return value
+	}
+	if cookie, err := r.Cookie(langCookie); err == nil {
+		if value, ok := parseLanguage(cookie.Value); ok {
+			return value
+		}
+	}
+	return langVI
+}
+
+func (s *Server) baseData(lang string) pageData {
 	cfg := s.manager.Snapshot()
 	data := pageData{
 		Title:             "SMR Setup",
 		Version:           s.version,
 		CSRF:              s.csrf,
+		Lang:              lang,
 		ConfigPath:        s.manager.Path(),
-		APIKeyPlaceholder: "Chưa có key",
+		APIKeyPlaceholder: tr(lang, "placeholder.no_key"),
 		Config:            cfg,
 		Tiers:             config.Tiers,
 		Stats:             s.stats(),
-		Detections:        hostcfg.Detect(),
 	}
 	if cfg.Classifier.APIKey != "" {
-		data.APIKeyPlaceholder = "Đã lưu key · để trống nếu không đổi"
+		data.APIKeyPlaceholder = tr(lang, "placeholder.key_saved")
 	}
-	names := make([]string, 0, len(cfg.Profiles))
-	for name := range cfg.Profiles {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	data.DashboardURL, data.EnvironmentLabel = dashboardFor(cfg.Classifier.BaseURL)
+	names := profileNames(cfg.Profiles)
 	for _, name := range names {
 		profile := cfg.Profiles[name]
-		view := profileView{Name: name, Profile: profile}
+		view := profileView{Name: name, Label: profileLabel(name), Profile: profile, Total: len(config.Tiers)}
 		for _, tier := range config.Tiers {
 			entry := profile.Tiers[tier]
-			placeholder := "Chưa có"
+			placeholder := tr(lang, "placeholder.none")
 			if entry.APIKey != "" {
-				placeholder = "Đã lưu · để trống nếu không đổi"
+				placeholder = tr(lang, "placeholder.saved")
+			}
+			if entry.BaseURL != "" && entry.Model != "" {
+				view.Configured++
 			}
 			view.Tiers = append(view.Tiers, tierView{
-				Name: tier, BaseURL: entry.BaseURL, Model: entry.Model, KeyPlaceholder: placeholder,
+				Name: tier, Label: tierLabel(lang, tier), BaseURL: entry.BaseURL, Model: entry.Model, KeyPlaceholder: placeholder,
 			})
 		}
 		data.Profiles = append(data.Profiles, view)
 	}
+	data.activateTab("")
+	for _, detection := range hostcfg.Detect() {
+		data.Detections = append(data.Detections, hostView{
+			Detection: detection,
+			Label:     profileLabel(detection.Host),
+			UsesSMR:   hostUsesSMR(detection, cfg.Listen),
+		})
+	}
+	data.Steps = buildSteps(cfg, data.Detections, data.Stats, lang)
+	data.Verified = data.Stats.Forwarded > 0
+	data.setLanguageURLs()
 	return data
+}
+
+// activateTab marks exactly one profile tab as selected. An unknown or empty
+// name falls back to the first tab so the page always shows a panel.
+func (d *pageData) activateTab(name string) {
+	if len(d.Profiles) == 0 {
+		return
+	}
+	selected := 0
+	for index := range d.Profiles {
+		if d.Profiles[index].Name == name {
+			selected = index
+			break
+		}
+	}
+	for index := range d.Profiles {
+		d.Profiles[index].Active = index == selected
+	}
+	d.ActiveTab = d.Profiles[selected].Name
+	d.setLanguageURLs()
+}
+
+// setLanguageURLs keeps the selected tab when the user switches language.
+func (d *pageData) setLanguageURLs() {
+	base := "/?"
+	if d.ActiveTab != "" {
+		base += "tab=" + url.QueryEscape(d.ActiveTab) + "&"
+	}
+	d.LangURLVI = base + "lang=" + langVI
+	d.LangURLEN = base + "lang=" + langEN
+}
+
+// profileNames keeps Codex and Claude Code in a fixed order regardless of map
+// iteration, then appends any other profile alphabetically.
+func profileNames(profiles map[string]config.Profile) []string {
+	names := make([]string, 0, len(profiles))
+	for _, name := range []string{hostcfg.Codex, hostcfg.Claude} {
+		if _, ok := profiles[name]; ok {
+			names = append(names, name)
+		}
+	}
+	extra := make([]string, 0, len(profiles))
+	for name := range profiles {
+		if name != hostcfg.Codex && name != hostcfg.Claude {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	return append(names, extra...)
+}
+
+func profileLabel(name string) string {
+	switch name {
+	case hostcfg.Codex:
+		return "Codex"
+	case hostcfg.Claude:
+		return "Claude Code"
+	default:
+		if name == "" {
+			return name
+		}
+		return strings.ToUpper(name[:1]) + name[1:]
+	}
+}
+
+// dashboardFor maps the classifier API host to the matching dashboard. A user
+// on testing must sign up, top up and create the key on the testing dashboard,
+// because keys and balances are not shared between environments.
+func dashboardFor(baseURL string) (string, string) {
+	host := ""
+	if parsed, err := url.Parse(strings.TrimSpace(baseURL)); err == nil {
+		host = strings.ToLower(parsed.Hostname())
+	}
+	if strings.Contains(host, "testing") || strings.Contains(host, "test") {
+		return "https://llm-testing.acmeai.vn", "Testing"
+	}
+	return "https://llm.acmeai.vn", "Production"
+}
+
+// hostUsesSMR reports whether a host already points at this SMR instance.
+func hostUsesSMR(detection hostcfg.Detection, listen string) bool {
+	if detection.Provider == "smr" {
+		return true
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil || port == "" || detection.BaseURL == "" {
+		return false
+	}
+	return strings.Contains(detection.BaseURL, "127.0.0.1:"+port)
+}
+
+func buildSteps(cfg config.Config, detections []hostView, stats proxy.Stats, lang string) []stepView {
+	classified := cfg.Classifier.APIKey != ""
+	readyProfile := false
+	for _, profile := range cfg.Profiles {
+		complete := true
+		for _, tier := range config.Tiers {
+			entry := profile.Tiers[tier]
+			if entry.BaseURL == "" || entry.Model == "" {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			readyProfile = true
+			break
+		}
+	}
+	hostReady := false
+	for _, detection := range detections {
+		if detection.UsesSMR {
+			hostReady = true
+			break
+		}
+	}
+	return []stepView{
+		{N: 1, Title: tr(lang, "steps.connect"), Done: classified},
+		{N: 2, Title: tr(lang, "steps.models"), Done: readyProfile},
+		{N: 3, Title: tr(lang, "steps.install"), Done: hostReady},
+		{N: 4, Title: tr(lang, "steps.verify"), Done: stats.Forwarded > 0},
+	}
 }
 
 func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	lang := s.language(w, r)
 	cfg := s.manager.Snapshot()
 	cfg.Classifier.BaseURL = strings.TrimRight(strings.TrimSpace(r.PostFormValue("classifier_base_url")), "/")
 	if key := strings.TrimSpace(r.PostFormValue("classifier_api_key")); key != "" {
@@ -250,39 +458,75 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		cfg.Profiles[name] = profile
 	}
 	if err := s.manager.Update(cfg); err != nil {
-		data := s.baseData()
-		data.Error = "Không lưu được cấu hình: " + err.Error()
+		data := s.baseData(lang)
+		data.activateTab(r.PostFormValue("smr_tab"))
+		data.Error = trf(lang, "error.save", err.Error())
 		s.render(w, http.StatusBadRequest, "page", data)
 		return
 	}
-	http.Redirect(w, r, "/?saved=1", http.StatusSeeOther)
+	redirect := "/?saved=1"
+	if tab := strings.TrimSpace(r.PostFormValue("smr_tab")); tab != "" {
+		redirect += "&tab=" + url.QueryEscape(tab)
+	}
+	redirect += "&lang=" + lang
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
 func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	lang := s.language(w, r)
 	cfg := s.manager.Snapshot()
-	key := strings.TrimSpace(r.PostFormValue("api_key"))
+	key := strings.TrimSpace(r.PostFormValue("classifier_api_key"))
+	if key == "" {
+		key = strings.TrimSpace(r.PostFormValue("api_key"))
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(r.PostFormValue("classifier_base_url")), "/")
+	if baseURL == "" {
+		baseURL = cfg.Classifier.BaseURL
+	}
+	newKey := key != "" && key != cfg.Classifier.APIKey
 	if key == "" {
 		key = cfg.Classifier.APIKey
 	}
-	data := s.baseData()
+	data := s.baseData(lang)
+	data.activateTab(r.PostFormValue("smr_tab"))
 	if key == "" {
-		data.Test = &testResult{Error: "Chưa có API key. Nhập key hoặc lưu key trước."}
+		data.Test = &testResult{Error: tr(lang, "error.no_key")}
 		s.render(w, http.StatusOK, "page", data)
 		return
 	}
-	client := classifier.New(cfg.Classifier.BaseURL, key, 15*time.Second, 0)
+	client := classifier.New(baseURL, key, 15*time.Second, 0)
 	account, err := client.Account(r.Context())
 	if err != nil {
-		data.Test = &testResult{Error: publicClassifierError(err)}
+		data.Test = &testResult{Error: publicClassifierError(lang, err)}
 	} else {
+		saved := false
+		if newKey {
+			// A key that just answered with a balance is known-good, so keep it
+			// instead of making the user paste the secret a second time.
+			cfg.Classifier.APIKey = key
+			cfg.Classifier.BaseURL = baseURL
+			if maximum, ok := parseInt(r.PostFormValue("max_chars")); ok && maximum > 0 {
+				cfg.Classifier.MaxChars = int(maximum)
+			}
+			if tier := strings.TrimSpace(r.PostFormValue("fallback_tier")); config.IsTier(tier) {
+				cfg.Classifier.FallbackTier = tier
+			}
+			if updateErr := s.manager.Update(cfg); updateErr != nil {
+				data.Test = &testResult{Error: trf(lang, "error.test_save", updateErr.Error())}
+				s.render(w, http.StatusOK, "page", data)
+				return
+			}
+			saved = true
+		}
 		data.Test = &testResult{
 			OK:              true,
 			BalanceVND:      account.BalanceVND,
 			MaxStateChars:   account.MaxStateChars,
 			CacheTTLSeconds: account.CacheTTLSeconds,
+			Saved:           saved,
 		}
 	}
 	s.render(w, http.StatusOK, "page", data)
@@ -292,12 +536,14 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	lang := s.language(w, r)
 	host := strings.TrimSpace(r.PostFormValue("host"))
 	cfg := s.manager.Snapshot()
 	change, err := hostcfg.PreviewFor(host, s.dataDir, cfg.Listen)
-	data := s.baseData()
+	data := s.baseData(lang)
+	data.activateTab(r.PostFormValue("smr_tab"))
 	if err != nil {
-		data.Error = "Không tạo được diff: " + err.Error()
+		data.Error = trf(lang, "error.preview", err.Error())
 		s.render(w, http.StatusBadRequest, "page", data)
 		return
 	}
@@ -309,26 +555,35 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	if !s.checkCSRF(w, r) {
 		return
 	}
+	lang := s.language(w, r)
 	host := strings.TrimSpace(r.PostFormValue("host"))
 	change := hostcfg.Change{Host: host, ExpectedHash: strings.TrimSpace(r.PostFormValue("expected"))}
 	cfg := s.manager.Snapshot()
 	if err := hostcfg.ApplyFor(change, s.dataDir, cfg.Listen); err != nil {
-		data := s.baseData()
-		data.Error = "Không ghi được cấu hình host: " + err.Error()
+		data := s.baseData(lang)
+		data.activateTab(r.PostFormValue("smr_tab"))
+		data.Error = trf(lang, "error.apply", err.Error())
 		s.render(w, http.StatusConflict, "page", data)
 		return
 	}
 	s.logger.Info("host config updated", "host", host)
-	http.Redirect(w, r, "/?applied="+host, http.StatusSeeOther)
+	http.Redirect(w, r, "/?applied="+url.QueryEscape(host)+"&lang="+lang, http.StatusSeeOther)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	lang := s.language(w, r)
 	path := filepath.Join(s.dataDir, LogFile)
 	body, err := logtail.Tail(path, 200)
 	if err != nil {
-		body = "Chưa có log tại " + path + "\n"
+		body = trf(lang, "logs.empty", path)
 	}
-	s.render(w, http.StatusOK, "logs", logsData{Path: path, Logs: body})
+	s.render(w, http.StatusOK, "logs", logsData{
+		Path:      path,
+		Logs:      body,
+		Lang:      lang,
+		LangURLVI: "/logs?lang=" + langVI,
+		LangURLEN: "/logs?lang=" + langEN,
+	})
 }
 
 func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
@@ -384,17 +639,17 @@ func parseInt(value string) (int64, bool) {
 	return result, true
 }
 
-func publicClassifierError(err error) string {
+func publicClassifierError(lang string, err error) string {
 	if err == nil {
 		return ""
 	}
 	if strings.Contains(err.Error(), "invalid or revoked") {
-		return "API key không hợp lệ hoặc đã bị thu hồi."
+		return tr(lang, "error.invalid_key")
 	}
 	if strings.Contains(err.Error(), "Not enough") {
-		return "Key hợp lệ nhưng tài khoản chưa có số dư."
+		return tr(lang, "error.no_balance")
 	}
-	return "Không kết nối được api.acmeai.vn. Kiểm tra mạng và base URL."
+	return tr(lang, "error.network")
 }
 
 // GenerateToken creates a URL-safe 256-bit secret.

@@ -1,105 +1,202 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SMR Setup · ACME AI</title>
 <meta name="robots" content="noindex">
+<link rel="icon" href="/static/acme-ai-logo-square.png">
 <link rel="stylesheet" href="/static/ui.css">
 </head>
 <body>
 <header class="top">
-  <div>
-    <span class="eyebrow">ACME AI</span>
-    <h1>Smart Model Router</h1>
-    <p class="muted">Cấu hình localhost · {{.Version}}</p>
+  <div class="brand">
+    <img class="logo" src="/static/acme-ai-logo-square.png" alt="ACME AI" width="54" height="54">
+    <div>
+      <span class="eyebrow">ACME AI</span>
+      <h1>Smart Model Router</h1>
+      <p class="muted">{{t .Lang "header.local"}} · <span class="mono">{{.Version}}</span> · {{t .Lang "header.listening"}} <span class="mono">{{.Config.Listen}}</span></p>
+    </div>
   </div>
-  <a class="btn" href="/logs">Xem log</a>
+  <div class="top-actions">
+    <div class="lang" role="group" aria-label="Language / Ngôn ngữ">
+      <a class="lang-opt{{if eq .Lang "vi"}} active{{end}}" href="{{.LangURLVI}}" hreflang="vi" lang="vi">VI</a>
+      <a class="lang-opt{{if eq .Lang "en"}} active{{end}}" href="{{.LangURLEN}}" hreflang="en" lang="en">EN</a>
+    </div>
+    <a class="btn" href="/logs">{{t .Lang "header.log"}}</a>
+  </div>
 </header>
 
 <main>
 {{if .Error}}<div class="notice error" role="alert">{{.Error}}</div>{{end}}
 {{if .Notice}}<div class="notice ok" role="status">{{.Notice}}</div>{{end}}
 
-<section class="grid status">
-  <div class="card"><span>Daemon</span><strong>Đang chạy</strong><small>{{.Stats.Requests}} request · {{.Stats.Forwarded}} đã forward</small></div>
-  <div class="card"><span>Classifier</span><strong>{{if .Stats.LastClassifierOK}}OK{{else}}Chưa xác nhận{{end}}</strong><small>{{if .Stats.LastClassifierAt}}{{.Stats.LastClassifierAt}}{{else}}Chưa gọi lần nào{{end}}</small></div>
-  <div class="card"><span>Lượt gần nhất</span><strong>{{if .Stats.LastTier}}{{.Stats.LastTier}}{{else}}—{{end}}</strong><small>{{.Stats.LastChargedVND}} VND · số dư {{.Stats.LastBalanceVND}} VND</small></div>
-  <div class="card"><span>Config</span><strong class="mono">{{.ConfigPath}}</strong><small>Chỉ user hiện tại có quyền ghi</small></div>
-</section>
-
-<section class="card">
-  <div class="section-head">
-    <div><h2>Kết nối ACME AI</h2><p class="muted">Key chỉ lưu trên máy này. Ô để trống nghĩa là giữ key đã lưu.</p></div>
-  </div>
-  <form method="post" action="/test" class="inline-form">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <label>API key<input class="mono" type="password" name="api_key" autocomplete="off" placeholder="{{.APIKeyPlaceholder}}"></label>
-    <button class="btn" type="submit">Test connection</button>
-  </form>
-  {{if .Test}}
-  <div class="test-result {{if .Test.OK}}ok{{else}}error{{end}}">
-    {{if .Test.OK}}<strong>Kết nối thành công.</strong> Số dư {{.Test.BalanceVND}} VND · tối đa {{.Test.MaxStateChars}} ký tự · cache {{.Test.CacheTTLSeconds}} giây.
-    {{else}}<strong>Chưa kết nối được.</strong> {{.Test.Error}}{{end}}
-  </div>
+<nav class="stepper" aria-label="{{t .Lang "nav.label"}}">
+  {{range .Steps}}
+  <a class="step{{if .Done}} done{{end}}" href="#step-{{.N}}">
+    <span class="step-num" aria-hidden="true">{{if .Done}}✓{{else}}{{.N}}{{end}}</span>
+    <span class="step-title">{{.Title}}</span>
+  </a>
   {{end}}
-</section>
+</nav>
 
 <form method="post" action="/save">
-  <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <section class="card">
-    <h2>Cấu hình classifier</h2>
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+
+<section class="card" id="step-1">
+  <div class="card-head">
+    <span class="num" aria-hidden="true">1</span>
+    <div class="card-title">
+      <h2>{{t .Lang "steps.connect"}}</h2>
+      <p class="muted">{{t .Lang "step1.desc"}}</p>
+    </div>
+    {{if .Config.Classifier.APIKey}}<span class="pill ok">{{t .Lang "step1.key_saved"}}</span>{{else}}<span class="pill">{{t .Lang "step1.key_missing"}}</span>{{end}}
+  </div>
+
+  {{if .Config.Classifier.APIKey}}
+  <p class="hint key-hint">{{t .Lang "step1.rotate"}} <a class="inline-link" href="{{.DashboardURL}}/keys" target="_blank" rel="noopener noreferrer">{{.EnvironmentLabel}} dashboard ↗</a></p>
+  {{else}}
+  <div class="callout">
+    <div class="callout-text">
+      <strong>{{t .Lang "step1.callout.title"}}</strong>
+      <ol class="mini-steps">
+        <li>{{t .Lang "step1.callout.s1"}}</li>
+        <li>{{t .Lang "step1.callout.s2"}}</li>
+        <li>{{t .Lang "step1.callout.s3"}}</li>
+      </ol>
+      <p class="hint">{{t .Lang "step1.callout.note"}}</p>
+    </div>
+    <div class="callout-action">
+      <a class="btn primary" href="{{.DashboardURL}}" target="_blank" rel="noopener noreferrer">{{t .Lang "step1.callout.cta"}}<span class="pill-env">{{.EnvironmentLabel}}</span>↗</a>
+      <span class="mono small">{{.DashboardURL}}</span>
+    </div>
+  </div>
+  {{end}}
+
+  <div class="form-grid">
+    <label>{{t .Lang "step1.base_url"}}
+      <input name="classifier_base_url" value="{{.Config.Classifier.BaseURL}}" required spellcheck="false">
+      <small class="hint">Testing <span class="mono">https://api-testing.acmeai.vn</span> · Production <span class="mono">https://api.acmeai.vn</span></small>
+    </label>
+    <label>{{t .Lang "step1.api_key"}}
+      <input class="mono" type="password" name="classifier_api_key" autocomplete="off" placeholder="{{.APIKeyPlaceholder}}">
+      <small class="hint">{{t .Lang "step1.api_key_hint"}}</small>
+    </label>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary" type="submit" formaction="/test">{{t .Lang "step1.test"}}</button>
+    <span class="muted small">{{t .Lang "step1.test_note"}}</span>
+  </div>
+
+  {{if .Test}}
+  <div class="test-result {{if .Test.OK}}ok{{else}}error{{end}}" role="status">
+    {{if .Test.OK}}
+    <strong>{{t .Lang "step1.ok"}}</strong> {{tf .Lang "step1.ok_detail" .Test.BalanceVND .Test.MaxStateChars .Test.CacheTTLSeconds}}
+    {{if .Test.Saved}}<br><span class="small">{{t .Lang "step1.saved"}}</span>{{end}}
+    {{else}}
+    <strong>{{t .Lang "step1.fail"}}</strong> {{.Test.Error}}
+    {{end}}
+  </div>
+  {{end}}
+
+  <details class="advanced">
+    <summary>{{t .Lang "step1.advanced"}}</summary>
     <div class="form-grid">
-      <label>Base URL<input name="classifier_base_url" value="{{.Config.Classifier.BaseURL}}" required></label>
-      <label>API key mới<input class="mono" type="password" name="classifier_api_key" autocomplete="off" placeholder="{{.APIKeyPlaceholder}}"></label>
-      <label>Max state chars<input type="number" name="max_chars" min="1000" max="100000" value="{{.Config.Classifier.MaxChars}}" required></label>
-      <label>Fallback tier
+      <label>{{t .Lang "step1.max_chars"}}
+        <input type="number" name="max_chars" min="1000" max="100000" value="{{.Config.Classifier.MaxChars}}" required>
+        <small class="hint">{{t .Lang "step1.max_chars_hint"}}</small>
+      </label>
+      <label>{{t .Lang "step1.fallback"}}
         <select name="fallback_tier">
-          {{range .Tiers}}<option value="{{.}}" {{if eq . $.Config.Classifier.FallbackTier}}selected{{end}}>{{.}}</option>{{end}}
+          {{range .Tiers}}<option value="{{.}}" {{if eq . $.Config.Classifier.FallbackTier}}selected{{end}}>{{.}} · {{tierLabel $.Lang .}}</option>{{end}}
         </select>
+        <small class="hint">{{t .Lang "step1.fallback_hint"}}</small>
       </label>
     </div>
-  </section>
+  </details>
+</section>
 
-  {{range .Profiles}}
-  {{$profile := .}}
-  <section class="card">
-    <div class="section-head"><div><h2>Profile {{.Name}}</h2><p class="muted">API {{.Profile.API}} · auth {{.Profile.Auth}}</p></div></div>
-    {{if eq .Name "claude"}}<div class="notice warn" role="note"><strong>Claude Code cần API key/token Anthropic tương thích.</strong> Claude Pro OAuth không được hỗ trợ và không thể dùng làm credential cho profile này.</div>{{end}}
-    <div class="tier-table">
-      <div class="tier-head"><span>Tier</span><span>Base URL</span><span>Model</span><span>API key</span></div>
-      {{range .Tiers}}
-      <div class="tier-row">
-        <strong>{{.Name}}</strong>
-        <input name="{{$profile.Name}}_{{.Name}}_base_url" value="{{.BaseURL}}" placeholder="https://provider.example/v1">
-        <input name="{{$profile.Name}}_{{.Name}}_model" value="{{.Model}}" placeholder="model-name">
-        <input class="mono" type="password" name="{{$profile.Name}}_{{.Name}}_api_key" autocomplete="off" placeholder="{{.KeyPlaceholder}}">
+<section class="card" id="step-2">
+  <div class="card-head">
+    <span class="num" aria-hidden="true">2</span>
+    <div class="card-title">
+      <h2>{{t .Lang "steps.models"}}</h2>
+      <p class="muted">{{t .Lang "step2.desc"}}</p>
+    </div>
+  </div>
+
+  <div class="tabs">
+    {{range .Profiles}}
+    <input class="tab-radio" type="radio" name="smr_tab" id="tab-{{.Name}}" value="{{.Name}}"{{if .Active}} checked{{end}}>
+    {{end}}
+    <div class="tabbar" role="tablist">
+      {{range .Profiles}}
+      <label class="tab" for="tab-{{.Name}}" role="tab">
+        <strong>{{.Label}}</strong>
+        <small>{{tf $.Lang "step2.configured" .Configured .Total}}</small>
+      </label>
+      {{end}}
+    </div>
+    <div class="tab-panels">
+      {{range .Profiles}}
+      {{$profile := .}}
+      <div class="tab-panel" role="tabpanel" aria-label="Profile {{.Label}}">
+        {{if eq .Name "claude"}}
+        <div class="notice warn" role="note"><strong>{{t $.Lang "step2.claude.title"}}</strong> {{t $.Lang "step2.claude.body"}}</div>
+        {{end}}
+        <div class="tier-table">
+          <div class="tier-head" aria-hidden="true"><span>Tier</span><span>Base URL</span><span>Model</span><span>API key</span></div>
+          {{range .Tiers}}
+          <div class="tier-row">
+            <span class="tier-name"><strong>{{.Name}}</strong><small>{{.Label}}</small></span>
+            <input name="{{$profile.Name}}_{{.Name}}_base_url" value="{{.BaseURL}}" placeholder="https://provider.example/v1" spellcheck="false" aria-label="{{$profile.Label}} tier {{.Name}} base URL">
+            <input name="{{$profile.Name}}_{{.Name}}_model" value="{{.Model}}" placeholder="model-name" spellcheck="false" aria-label="{{$profile.Label}} tier {{.Name}} model">
+            <input class="mono" type="password" name="{{$profile.Name}}_{{.Name}}_api_key" autocomplete="off" placeholder="{{.KeyPlaceholder}}" aria-label="{{$profile.Label}} tier {{.Name}} API key">
+          </div>
+          {{end}}
+        </div>
+        <p class="hint">{{t $.Lang "step2.hint"}}</p>
       </div>
       {{end}}
     </div>
-  </section>
-  {{end}}
+  </div>
+</section>
 
-  <div class="sticky-actions"><button class="btn primary" type="submit">Lưu cấu hình</button></div>
+<div class="savebar">
+  <span class="muted small">{{t .Lang "step2.save_note"}}</span>
+  <button class="btn primary" type="submit">{{t .Lang "step2.save"}}</button>
+</div>
 </form>
 
-<section class="card">
-  <h2>Cấu hình host</h2>
-  <p class="muted">SMR chỉ thêm block/provider hoặc env của chính nó. Mọi thay đổi có diff và backup; không tự đặt làm mặc định.</p>
-  <div class="notice warn" role="note"><strong>Trước khi cài Claude Code:</strong> profile Claude phải có Anthropic API key/token tương thích. Claude Pro OAuth không được hỗ trợ.</div>
+<section class="card" id="step-3">
+  <div class="card-head">
+    <span class="num" aria-hidden="true">3</span>
+    <div class="card-title">
+      <h2>{{t .Lang "steps.install"}}</h2>
+      <p class="muted">{{t .Lang "step3.desc"}}</p>
+    </div>
+  </div>
   <div class="hosts">
     {{range .Detections}}
     <div class="host">
-      <div>
-        <h3>{{.Host}}</h3>
+      <div class="host-main">
+        <div class="host-title">
+          <h3>{{.Label}}</h3>
+          {{if .UsesSMR}}<span class="pill ok">{{t $.Lang "step3.using"}}</span>{{else}}<span class="pill">{{t $.Lang "step3.not_using"}}</span>{{end}}
+        </div>
         <p class="mono small">{{.Path}}</p>
-        {{if .Exists}}<p class="small">Đã có config.{{if .Provider}} Provider: {{.Provider}}.{{end}}{{if .BaseURL}} Base URL: {{.BaseURL}}.{{end}}{{if .Model}} Model: {{.Model}}.{{end}}</p>{{else}}<p class="small">Chưa có file cấu hình.</p>{{end}}
-        {{range .Notes}}<p class="note-line">{{.}}</p>{{end}}
+        {{if .Exists}}
+        <p class="small">{{t $.Lang "step3.has_file"}}{{if .BaseURL}} {{t $.Lang "step3.current_base"}} <span class="mono">{{.BaseURL}}</span>.{{end}}{{if .Model}} {{t $.Lang "step3.model"}} <span class="mono">{{.Model}}</span>.{{end}}</p>
+        {{else}}
+        <p class="small">{{t $.Lang "step3.no_file"}}</p>
+        {{end}}
+        {{range .Notes}}<p class="note-line">{{translateNote $.Lang .}}</p>{{end}}
       </div>
       <form method="post" action="/hosts/preview">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="host" value="{{.Host}}">
-        <button class="btn" type="submit">Xem diff & cài</button>
+        <button class="btn" type="submit">{{if .UsesSMR}}{{t $.Lang "step3.view_update"}}{{else}}{{t $.Lang "step3.view_install"}}{{end}}</button>
       </form>
     </div>
     {{end}}
@@ -107,24 +204,49 @@
 </section>
 
 {{if .Change}}
-<section class="card">
-  <h2>Diff cho {{.Change.Host}}</h2>
-  <p class="mono small">{{.Change.Path}}</p>
+<section class="card diff-card">
+  <div class="card-head">
+    <div class="card-title">
+      <h2>{{tf .Lang "diff.title" .Change.Host}}</h2>
+      <p class="mono small">{{.Change.Path}}</p>
+    </div>
+  </div>
   <pre class="diff">{{.Change.Diff}}</pre>
   <form method="post" action="/hosts/apply" class="actions">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="host" value="{{.Change.Host}}">
     <input type="hidden" name="expected" value="{{.Change.ExpectedHash}}">
-    <button class="btn primary" type="submit">Xác nhận ghi thay đổi</button>
-    <a class="btn" href="/">Bỏ qua host này</a>
+    <button class="btn primary" type="submit">{{t .Lang "diff.confirm"}}</button>
+    <a class="btn" href="/?lang={{.Lang}}">{{t .Lang "diff.skip"}}</a>
   </form>
 </section>
 {{end}}
+
+<section class="card" id="step-4">
+  <div class="card-head">
+    <span class="num" aria-hidden="true">4</span>
+    <div class="card-title">
+      <h2>{{t .Lang "steps.verify"}}</h2>
+      <p class="muted">{{t .Lang "step4.before"}} <span class="mono">X-SMR-Tier</span> {{t .Lang "step4.mid"}} <span class="mono">X-SMR-Charged-VND</span> {{t .Lang "step4.after"}}</p>
+    </div>
+    {{if .Verified}}<span class="pill ok">{{t .Lang "step4.seen"}}</span>{{else}}<span class="pill">{{t .Lang "step4.none"}}</span>{{end}}
+  </div>
+  <div class="grid status">
+    <div class="card"><span>{{t .Lang "step4.daemon"}}</span><strong>{{t .Lang "step4.running"}}</strong><small>{{tf .Lang "step4.requests" .Stats.Requests .Stats.Forwarded}}</small></div>
+    <div class="card"><span>{{t .Lang "step4.classify"}}</span><strong>{{if .Stats.LastClassifierOK}}OK{{else}}{{t .Lang "step4.unconfirmed"}}{{end}}</strong><small>{{if .Stats.LastClassifierAt}}{{.Stats.LastClassifierAt}}{{else}}{{t .Lang "step4.never"}}{{end}}</small></div>
+    <div class="card"><span>{{t .Lang "step4.last"}}</span><strong>{{if .Stats.LastTier}}{{.Stats.LastTier}}{{else}}—{{end}}</strong><small>{{tf .Lang "step4.last_detail" .Stats.LastChargedVND .Stats.LastBalanceVND}}</small></div>
+    <div class="card"><span>{{t .Lang "step4.cache"}}</span><strong>{{.Stats.CacheHits}}</strong><small>{{t .Lang "step4.cache_hint"}}</small></div>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/logs">{{t .Lang "step4.view_log"}}</a>
+    <span class="muted small">{{t .Lang "step4.config_file"}} <span class="mono">{{.ConfigPath}}</span> · {{t .Lang "step4.readable"}}</span>
+  </div>
+</section>
 </main>
 
 <footer>
-  <span>Chỉ bind loopback. Kết nối LAN bị từ chối.</span>
-  <span>Không log prompt, API key hoặc token.</span>
+  <span>{{t .Lang "footer.loopback"}}</span>
+  <span>{{t .Lang "footer.no_log"}}</span>
 </footer>
 </body>
 </html>

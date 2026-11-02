@@ -28,14 +28,17 @@ const (
 )
 
 type Detection struct {
-	Host             string   `json:"host"`
-	Path             string   `json:"path"`
-	Exists           bool     `json:"exists"`
-	Provider         string   `json:"provider,omitempty"`
-	BaseURL          string   `json:"base_url,omitempty"`
-	Model            string   `json:"model,omitempty"`
-	APIKeyConfigured bool     `json:"api_key_configured"`
-	Notes            []string `json:"notes,omitempty"`
+	Host             string `json:"host"`
+	Path             string `json:"path"`
+	Exists           bool   `json:"exists"`
+	Provider         string `json:"provider,omitempty"`
+	BaseURL          string `json:"base_url,omitempty"`
+	Model            string `json:"model,omitempty"`
+	APIKeyConfigured bool   `json:"api_key_configured"`
+	// Notes holds stable codes, not sentences, so every surface can localise
+	// them. A code may carry one argument after a colon, such as
+	// "codex.env_key:OPENAI_API_KEY".
+	Notes []string `json:"notes,omitempty"`
 }
 
 type Change struct {
@@ -103,7 +106,7 @@ func DetectCodex() (Detection, error) {
 	detection := Detection{Host: Codex, Path: path}
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		detection.Notes = append(detection.Notes, "Chưa có cấu hình Codex; SMR sẽ tạo file mới khi bạn xác nhận.")
+		detection.Notes = append(detection.Notes, "codex.no_config")
 		return detection, nil
 	}
 	if err != nil {
@@ -146,10 +149,10 @@ func DetectCodex() (Detection, error) {
 	detection.Model = model
 	if envKey != "" && os.Getenv(envKey) != "" {
 		detection.APIKeyConfigured = true
-		detection.Notes = append(detection.Notes, "Codex đang đọc API key từ biến môi trường "+envKey+". SMR không sao chép giá trị này.")
+		detection.Notes = append(detection.Notes, "codex.env_key:"+envKey)
 	}
 	if provider == "" {
-		detection.Notes = append(detection.Notes, "Không tìm thấy provider tùy chỉnh trong Codex config.")
+		detection.Notes = append(detection.Notes, "codex.no_provider")
 	}
 	return detection, nil
 }
@@ -162,7 +165,7 @@ func DetectClaude() (Detection, error) {
 	detection := Detection{Host: Claude, Path: path}
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		detection.Notes = append(detection.Notes, "Chưa có Claude Code settings; SMR sẽ tạo file mới khi bạn xác nhận.")
+		detection.Notes = append(detection.Notes, "claude.no_settings")
 		return detection, nil
 	}
 	if err != nil {
@@ -171,7 +174,7 @@ func DetectClaude() (Detection, error) {
 	detection.Exists = true
 	var settings map[string]any
 	if err := json.Unmarshal(body, &settings); err != nil {
-		detection.Notes = append(detection.Notes, "settings.json hiện tại không phải JSON hợp lệ; SMR sẽ không ghi đè.")
+		detection.Notes = append(detection.Notes, "claude.invalid_json")
 		return detection, nil
 	}
 	env, _ := settings["env"].(map[string]any)
@@ -182,10 +185,9 @@ func DetectClaude() (Detection, error) {
 		detection.APIKeyConfigured = hasKey || hasToken
 	}
 	if detection.BaseURL == "" {
-		detection.Notes = append(detection.Notes, "Không tìm thấy ANTHROPIC_BASE_URL trong Claude Code settings.")
+		detection.Notes = append(detection.Notes, "claude.no_base_url")
 	}
-	detection.Notes = append(detection.Notes,
-		"Claude Code cần Anthropic API key/token tương thích. Claude Pro OAuth không được hỗ trợ.")
+	detection.Notes = append(detection.Notes, "claude.needs_key")
 	return detection, nil
 }
 

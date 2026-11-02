@@ -158,12 +158,28 @@ Then invoke the SMR skill and follow its setup flow. Restart Claude Code after S
 
     smr setup
 
-The setup page asks for:
+The setup page is a four-step flow:
 
-1. Your ACME AI API key (`acme_sk_...`).
-2. Four models for the Codex profile.
-3. Four models for the Claude Code profile.
-4. Whether to import any existing Codex/Claude Code provider configuration.
+1. **Kết nối ACME AI** — the classifier base URL and your ACME AI API key
+   (`acme_sk_...`). If you do not have a key yet, the page links to the dashboard
+   for your environment (`llm.acmeai.vn`, or `llm-testing.acmeai.vn` when the base
+   URL is the testing API) in a new tab, where you sign up, top up, and create the
+   key. A key that passes the connection check is saved immediately.
+2. **Chọn model cho từng tier** — four tiers for the Codex profile and four for
+   the Claude Code profile, in separate tabs.
+3. **Cài vào agent** — the pending change for `~/.codex/config.toml` and
+   `~/.claude/settings.json`, shown as a diff with explicit confirmation and a
+   backup. Skipping a host is allowed.
+4. **Kiểm tra** — live counters for requests, the last tier and charge, and cache
+   hits, plus a link to the log.
+
+The step markers at the top turn green as each step is satisfied, so you can see
+at a glance what is still missing.
+
+The setup page is available in Vietnamese and English, with Vietnamese as the
+default. The `VI`/`EN` switch in the header stores the choice in a cookie, so the
+page keeps the same language on the next visit. Switching language keeps the
+selected profile tab.
 
 The API key is stored in the SMR configuration file with user-only permissions. The full key is shown only once on `llm.acmeai.vn`; SMR cannot recover it later.
 

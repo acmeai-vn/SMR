@@ -1,18 +1,28 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Log · SMR</title>
 <meta name="robots" content="noindex">
+<link rel="icon" href="/static/acme-ai-logo-square.png">
 <link rel="stylesheet" href="/static/ui.css">
 </head>
 <body>
 <header class="top">
-  <div><span class="eyebrow">ACME AI</span><h1>Log gần đây</h1><p class="muted">{{.Path}}</p></div>
-  <a class="btn" href="/">Về cấu hình</a>
+  <div class="brand">
+    <img class="logo" src="/static/acme-ai-logo-square.png" alt="ACME AI" width="54" height="54">
+    <div><span class="eyebrow">ACME AI</span><h1>{{t .Lang "logs.title"}}</h1><p class="muted mono">{{.Path}}</p></div>
+  </div>
+  <div class="top-actions">
+    <div class="lang" role="group" aria-label="Language / Ngôn ngữ">
+      <a class="lang-opt{{if eq .Lang "vi"}} active{{end}}" href="{{.LangURLVI}}" hreflang="vi" lang="vi">VI</a>
+      <a class="lang-opt{{if eq .Lang "en"}} active{{end}}" href="{{.LangURLEN}}" hreflang="en" lang="en">EN</a>
+    </div>
+    <a class="btn" href="/?lang={{.Lang}}">{{t .Lang "logs.back"}}</a>
+  </div>
 </header>
 <main><section class="card"><pre class="logs">{{.Logs}}</pre></section></main>
-<footer><span>Log không chứa prompt, API key hay token.</span></footer>
+<footer><span>{{t .Lang "logs.footer"}}</span></footer>
 </body>
 </html>
