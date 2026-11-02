@@ -250,3 +250,40 @@ func TestStopDetachedStopsRecordedDaemon(t *testing.T) {
 		t.Fatal("daemon is still running after StopDetached")
 	}
 }
+
+// macOS prints argv unquoted, so an install path with spaces used to be cut
+// down to "/Users/me/Library/Application". The daemon was then treated as a
+// reused pid and left running, while a restart reported success because the
+// old process still answered /health.
+func TestMatchesDaemonWithSpacesInExecutable(t *testing.T) {
+	exe := "/Users/me/Library/Application Support/AcmeAI/SMR/smr"
+	record := pidRecord{PID: 42, Exe: exe}
+	cases := []struct {
+		name    string
+		cmdline string
+		exe     string
+		want    bool
+	}{
+		{"ps comm unavailable", exe + " serve --background", "", true},
+		{"ps comm truncated at the first space", exe + " serve --background", "/Users/me/Library/Application", true},
+		{"ps comm present", exe + " serve", exe, true},
+		{"same prefix, different binary", exe + "2 serve", exe + "2", false},
+		{"different install", "/opt/smr/smr serve", "/opt/smr/smr", false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := matchesDaemon(record, testCase.cmdline, testCase.exe); got != testCase.want {
+				t.Errorf("matchesDaemon(%q, %q) = %v, want %v", testCase.cmdline, testCase.exe, got, testCase.want)
+			}
+		})
+	}
+}
+
+// A pid file without the executable path (written by an older build) still
+// identifies the daemon from its command line.
+func TestMatchesDaemonWithoutRecordedExecutable(t *testing.T) {
+	record := pidRecord{PID: 42}
+	if !matchesDaemon(record, "/opt/smr/smr serve", "") {
+		t.Fatal("old pid file no longer identifies the daemon")
+	}
+}

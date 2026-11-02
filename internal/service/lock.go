@@ -58,7 +58,12 @@ func AcquireLock(dataDir string) (*Lock, error) {
 			// A verification failure keeps the lock: a false "not running"
 			// would let two daemons race for the ports. A definite mismatch is
 			// a stale pid reused after a reboot, so the file is replaced.
-			if verifyErr != nil || match {
+			if verifyErr != nil && processAlive(record.PID) {
+				// Only a process that is still there blocks the start; it may
+				// have exited between the liveness check and the query.
+				return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, record.PID)
+			}
+			if verifyErr == nil && match {
 				return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, record.PID)
 			}
 		}

@@ -249,6 +249,11 @@ func stopDetachedAt(path string) error {
 	}
 	match, err := processMatchesDaemon(record)
 	if err != nil {
+		if !processAlive(record.PID) {
+			// It exited between the liveness check and the query. Returning
+			// the error here would make a restart fail on a stale pid file.
+			return removePIDFile(path, record.PID)
+		}
 		return fmt.Errorf("cannot verify pid %d before stopping it: %w", record.PID, err)
 	}
 	if !match {
@@ -260,19 +265,36 @@ func stopDetachedAt(path string) error {
 	if err != nil {
 		return err
 	}
+	// Ask for a graceful shutdown first so the daemon can finish in-flight
+	// requests. Windows has no SIGTERM, and terminateProcess kills there.
+	if err := terminateProcess(process); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	if waitForExit(record.PID, 12*time.Second) {
+		return removePIDFile(path, record.PID)
+	}
+	// Still serving after the drain window: force it down so the next start
+	// can bind the ports.
 	if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
-	// Kill only sends the signal. Wait for the process to disappear so a
-	// following start does not race the still-held lock.
-	deadline := time.Now().Add(5 * time.Second)
+	if waitForExit(record.PID, 3*time.Second) {
+		return removePIDFile(path, record.PID)
+	}
+	return fmt.Errorf("SMR pid %d did not exit", record.PID)
+}
+
+// waitForExit polls until pid disappears or the timeout expires. The signal
+// only requests an exit; a following start must not race the still-held lock.
+func waitForExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !processAlive(record.PID) {
-			return removePIDFile(path, record.PID)
+		if !processAlive(pid) {
+			return true
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("SMR pid %d did not exit", record.PID)
+	return !processAlive(pid)
 }
 
 // removePIDFile deletes path only when it still names pid.
@@ -306,12 +328,48 @@ func processMatchesDaemon(record pidRecord) (bool, error) {
 	if !isServeCommand(cmdline) {
 		return false, nil
 	}
-	if record.Exe == "" || exe == "" {
-		// Older pid file or an unreadable image path: the command line is the
-		// strongest signal left, and it already names the daemon.
-		return true, nil
+	return matchesDaemon(record, cmdline, exe), nil
+}
+
+// matchesDaemon decides whether a live process is the one the pid file
+// recorded. exe may be empty: macOS ps prints argv unquoted, so a path with
+// spaces cannot always be recovered from the command line alone.
+func matchesDaemon(record pidRecord, cmdline, exe string) bool {
+	if record.Exe == "" {
+		// Older pid file: the command line is the strongest signal left, and
+		// it already names the daemon.
+		return true
 	}
-	return sameExecutable(exe, record.Exe), nil
+	if executablePrefixesCommandLine(cmdline, record.Exe) {
+		// Unix argv is not quoted, so the recorded executable is a prefix of
+		// the command line even when the install path contains spaces.
+		return true
+	}
+	if exe == "" {
+		return true
+	}
+	return sameExecutable(exe, record.Exe)
+}
+
+// executablePrefixesCommandLine reports whether cmdline starts with exe,
+// followed by the argument separator. The boundary check keeps "/opt/smr/smr"
+// from matching "/opt/smr/smr2".
+func executablePrefixesCommandLine(cmdline, exe string) bool {
+	cmdline = strings.TrimSpace(cmdline)
+	exe = strings.TrimSpace(exe)
+	if exe == "" || len(cmdline) <= len(exe) {
+		return false
+	}
+	prefix := cmdline[:len(exe)]
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		if !strings.EqualFold(prefix, exe) {
+			return false
+		}
+	} else if prefix != exe {
+		return false
+	}
+	rest := cmdline[len(exe):]
+	return rest[0] == ' ' || rest[0] == '\t'
 }
 
 // sameExecutable compares paths, tolerating the " (deleted)" suffix Linux adds

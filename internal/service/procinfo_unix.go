@@ -33,9 +33,15 @@ func processCommand(pid int) (string, string, error) {
 		return "", "", fmt.Errorf("ps pid %d: %w", pid, err)
 	}
 	cmdline := strings.TrimSpace(string(output))
+	// macOS joins argv with spaces and does not quote it, so an install path
+	// such as "/Users/me/Library/Application Support/AcmeAI/SMR/smr" cannot be
+	// recovered with strings.Fields. Ask ps for comm separately: it is the
+	// executable path without arguments and keeps the spaces.
 	exe := ""
-	if fields := strings.Fields(cmdline); len(fields) > 0 && filepath.IsAbs(fields[0]) {
-		exe = fields[0]
+	if comm, commErr := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output(); commErr == nil {
+		if candidate := strings.TrimSpace(string(comm)); filepath.IsAbs(candidate) {
+			exe = candidate
+		}
 	}
 	return cmdline, exe, nil
 }
