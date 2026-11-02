@@ -53,6 +53,7 @@ var messages = map[string]message{
 	},
 	"step1.fallback":      {"Fallback tier", "Fallback tier"},
 	"step1.fallback_hint": {"Dùng khi bộ phân loại lỗi tạm thời sau khi đã retry.", "Used when the classifier keeps failing after a retry."},
+	"step1.env_override":  {"ACMEAI_API_KEY hoặc ACMEAI_BASE_URL đang được đặt bằng biến môi trường, nên giá trị dưới đây chỉ được lưu vào file. Daemon vẫn dùng biến môi trường cho tới khi bạn bỏ biến đó.", "ACMEAI_API_KEY or ACMEAI_BASE_URL is set in the environment, so the fields below are only saved to the file. The daemon keeps using the variable until you remove it."},
 
 	"step2.desc":         {"Mỗi agent dùng một profile riêng. SMR chuyển tiếp nguyên định dạng request, không đổi giữa OpenAI và Anthropic.", "Each agent uses its own profile. SMR forwards the request format as-is and never converts between OpenAI and Anthropic."},
 	"step2.configured":   {"%d/%d tier đã đủ", "%d/%d tiers ready"},
@@ -62,19 +63,35 @@ var messages = map[string]message{
 	"step2.save_note":    {"Lưu cho cả bước 1 và bước 2", "Saves both step 1 and step 2"},
 	"step2.save":         {"Lưu cấu hình", "Save configuration"},
 
-	"step3.desc":         {"SMR chỉ thêm provider hoặc biến môi trường của chính nó, kèm diff và bản backup. Không tự đặt SMR làm mặc định.", "SMR only adds its own provider block or environment entries, with a diff and a backup. It never makes itself the default."},
+	"step3.desc":         {"SMR không ghi vào file cấu hình của Codex hay Claude Code. Trang này chỉ hiện đúng phần bạn cần thêm hoặc sửa; bạn tự mở file, dán vào rồi kiểm tra lại.", "SMR does not write to the Codex or Claude Code config files. This page shows exactly what to add or change; you open the file, paste the blocks and check the result."},
 	"step3.using":        {"Đang dùng SMR", "Using SMR"},
 	"step3.not_using":    {"Chưa trỏ vào SMR", "Not pointed at SMR"},
 	"step3.has_file":     {"Đã có file cấu hình.", "The config file exists."},
 	"step3.current_base": {"Base URL hiện tại:", "Current base URL:"},
 	"step3.model":        {"Model:", "Model:"},
-	"step3.no_file":      {"Chưa có file cấu hình. SMR sẽ tạo mới khi bạn xác nhận.", "No config file yet. SMR creates it once you confirm."},
-	"step3.view_update":  {"Xem diff & cập nhật", "View diff & update"},
-	"step3.view_install": {"Xem diff & cài", "View diff & install"},
-
-	"diff.title":   {"Diff cho %s", "Diff for %s"},
-	"diff.confirm": {"Xác nhận ghi thay đổi", "Confirm and write"},
-	"diff.skip":    {"Bỏ qua", "Skip"},
+	"step3.no_file":      {"Chưa có file cấu hình. Bạn tự tạo file rồi dán phần bên dưới.", "No config file yet. Create it, then paste the blocks below."},
+	"step3.copy":         {"Sao chép", "Copy"},
+	"step3.copied":       {"Đã sao chép", "Copied"},
+	"step3.codex.default": {
+		"Dòng mặc định — đặt ở đầu file, TRƯỚC mọi bảng [..]. Nếu đã có model_provider, sửa giá trị thành smr.",
+		"Default line — put it at the top of the file, BEFORE any [table]. If model_provider already exists, change its value to smr.",
+	},
+	"step3.codex.block": {
+		"Thêm nguyên block này vào cuối file:",
+		"Add this block at the end of the file:",
+	},
+	"step3.codex.note": {
+		"Đừng dán lẫn dòng model_provider vào trong bảng; TOML sẽ hiểu nó là khóa của bảng cuối cùng. SMR không tự sửa file; bạn tự quyết định có đặt SMR làm mặc định hay không.",
+		"Do not paste the model_provider line inside a table; TOML would read it as a key of that table. SMR never edits the file; you decide whether to make SMR the default.",
+	},
+	"step3.claude.block": {
+		"Gộp vào object env đang có trong settings.json (đừng thay cả file):",
+		"Merge into the existing env object in settings.json (do not replace the file):",
+	},
+	"step3.claude.note": {
+		"ANTHROPIC_AUTH_TOKEN ở đây chỉ là placeholder; SMR thay bằng key của profile Claude khi forward. Nếu file đang có ANTHROPIC_API_KEY thì giữ hoặc bỏ đều được, SMR không dùng giá trị đó. Khởi động lại Claude Code sau khi sửa.",
+		"ANTHROPIC_AUTH_TOKEN here is only a placeholder; SMR replaces it with the Claude profile key when forwarding. If the file also has ANTHROPIC_API_KEY, keep it or remove it; SMR does not use that value. Restart Claude Code after the edit.",
+	},
 
 	"step4.before":   {"Mở agent, gửi một câu hỏi, rồi quay lại đây. Header", "Open the agent, send one prompt, then come back here. The header"},
 	"step4.mid":      {"cho biết tier đã chọn,", "shows the chosen tier and"},
@@ -122,12 +139,10 @@ var messages = map[string]message{
 	"placeholder.none":      {"Chưa có", "Not set"},
 	"placeholder.saved":     {"Đã lưu", "Saved"},
 
-	"notice.saved":   {"Đã lưu cấu hình. Daemon dùng cấu hình mới cho request tiếp theo.", "Configuration saved. The daemon uses it for the next request."},
-	"notice.applied": {"Đã cập nhật cấu hình %s. Khởi động lại host để nhận thay đổi.", "Updated the %s config. Restart the host to pick up the change."},
+	"notice.saved":     {"Đã lưu cấu hình. Daemon dùng cấu hình mới cho request tiếp theo.", "Configuration saved. The daemon uses it for the next request."},
+	"notice.saved_env": {"Đã lưu vào file, nhưng biến môi trường ACMEAI_API_KEY/ACMEAI_BASE_URL vẫn đang override khi daemon chạy.", "Saved to the file, but ACMEAI_API_KEY/ACMEAI_BASE_URL is still overriding it while the daemon runs."},
 
 	"error.save":      {"Không lưu được cấu hình: %s", "Could not save the configuration: %s"},
-	"error.preview":   {"Không tạo được diff: %s", "Could not build the diff: %s"},
-	"error.apply":     {"Không ghi được cấu hình host: %s", "Could not write the host config: %s"},
 	"error.test_save": {"Key hợp lệ nhưng không lưu được: %s", "The key is valid but could not be saved: %s"},
 	"error.no_key":    {"Chưa có API key. Dán key vào ô API key rồi kiểm tra lại.", "No API key yet. Paste one into the API key field and check again."},
 	"error.invalid_key": {
@@ -137,12 +152,12 @@ var messages = map[string]message{
 	"error.no_balance": {"Key hợp lệ nhưng tài khoản chưa có số dư.", "The key is valid but the account has no balance."},
 	"error.network":    {"Không kết nối được api.acmeai.vn. Kiểm tra mạng và base URL.", "Could not reach api.acmeai.vn. Check the network and the base URL."},
 
-	"note.codex.no_config":   {"Chưa có cấu hình Codex; SMR sẽ tạo file mới khi bạn xác nhận.", "No Codex config yet; SMR creates the file once you confirm."},
+	"note.codex.no_config":   {"Chưa có cấu hình Codex; bạn tự tạo ~/.codex/config.toml rồi dán các block bên dưới.", "No Codex config yet; create ~/.codex/config.toml yourself, then paste the blocks below."},
 	"note.codex.env_key":     {"Codex đang đọc API key từ biến môi trường %s. SMR không sao chép giá trị này.", "Codex reads its API key from the %s environment variable. SMR does not copy that value."},
 	"note.codex.no_provider": {"Không tìm thấy provider tùy chỉnh trong Codex config.", "No custom provider found in the Codex config."},
 	"note.claude.no_settings": {
-		"Chưa có Claude Code settings; SMR sẽ tạo file mới khi bạn xác nhận.",
-		"No Claude Code settings yet; SMR creates the file once you confirm.",
+		"Chưa có Claude Code settings; bạn tự tạo ~/.claude/settings.json rồi dán object env bên dưới.",
+		"No Claude Code settings yet; create ~/.claude/settings.json yourself, then paste the env object below.",
 	},
 	"note.claude.invalid_json": {"settings.json hiện tại không phải JSON hợp lệ; SMR sẽ không ghi đè.", "settings.json is not valid JSON; SMR will not overwrite it."},
 	"note.claude.no_base_url":  {"Không tìm thấy ANTHROPIC_BASE_URL trong Claude Code settings.", "ANTHROPIC_BASE_URL is missing from the Claude Code settings."},

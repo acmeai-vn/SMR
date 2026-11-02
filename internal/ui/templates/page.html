@@ -7,6 +7,7 @@
 <meta name="robots" content="noindex">
 <link rel="icon" href="/static/acme-ai-logo-square.png">
 <link rel="stylesheet" href="/static/ui.css">
+<link rel="stylesheet" href="/static/tabs.css">
 </head>
 <body>
 <header class="top">
@@ -42,6 +43,9 @@
 
 <form method="post" action="/save">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
+{{/* First submit in tree order, so Enter anywhere in the form saves instead of
+     running the step 1 connection test. */}}
+<button class="default-submit" type="submit" tabindex="-1" aria-hidden="true">{{t .Lang "step2.save"}}</button>
 
 <section class="card" id="step-1">
   <div class="card-head">
@@ -73,6 +77,10 @@
   </div>
   {{end}}
 
+  {{if or .EnvKeyOverride .EnvBaseURLOverride}}
+  <div class="notice warn" role="note">{{t .Lang "step1.env_override"}}</div>
+  {{end}}
+
   <div class="form-grid">
     <label>{{t .Lang "step1.base_url"}}
       <input name="classifier_base_url" value="{{.Config.Classifier.BaseURL}}" required spellcheck="false">
@@ -94,6 +102,7 @@
     {{if .Test.OK}}
     <strong>{{t .Lang "step1.ok"}}</strong> {{tf .Lang "step1.ok_detail" .Test.BalanceVND .Test.MaxStateChars .Test.CacheTTLSeconds}}
     {{if .Test.Saved}}<br><span class="small">{{t .Lang "step1.saved"}}</span>{{end}}
+    {{if .Test.EnvOverride}}<br><span class="small">{{t .Lang "step1.env_override"}}</span>{{end}}
     {{else}}
     <strong>{{t .Lang "step1.fail"}}</strong> {{.Test.Error}}
     {{end}}
@@ -193,34 +202,24 @@
         {{end}}
         {{range .Notes}}<p class="note-line">{{translateNote $.Lang .}}</p>{{end}}
       </div>
-      <form method="post" action="/hosts/preview">
-        <input type="hidden" name="csrf" value="{{$.CSRF}}">
-        <input type="hidden" name="host" value="{{.Host}}">
-        <button class="btn" type="submit">{{if .UsesSMR}}{{t $.Lang "step3.view_update"}}{{else}}{{t $.Lang "step3.view_install"}}{{end}}</button>
-      </form>
+      {{if eq .Host "codex"}}
+      <p class="hint">{{t $.Lang "step3.codex.note"}}</p>
+      {{else}}
+      <p class="hint">{{t $.Lang "step3.claude.note"}}</p>
+      {{end}}
+      {{range .Parts}}
+      <div class="snippet">
+        <div class="snippet-head">
+          <span>{{t $.Lang .TitleKey}}</span>
+          <button class="btn" type="button" data-copy="{{.Code}}" data-copied="{{t $.Lang "step3.copied"}}">{{t $.Lang "step3.copy"}}</button>
+        </div>
+        <pre>{{.Code}}</pre>
+      </div>
+      {{end}}
     </div>
     {{end}}
   </div>
 </section>
-
-{{if .Change}}
-<section class="card diff-card">
-  <div class="card-head">
-    <div class="card-title">
-      <h2>{{tf .Lang "diff.title" .Change.Host}}</h2>
-      <p class="mono small">{{.Change.Path}}</p>
-    </div>
-  </div>
-  <pre class="diff">{{.Change.Diff}}</pre>
-  <form method="post" action="/hosts/apply" class="actions">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <input type="hidden" name="host" value="{{.Change.Host}}">
-    <input type="hidden" name="expected" value="{{.Change.ExpectedHash}}">
-    <button class="btn primary" type="submit">{{t .Lang "diff.confirm"}}</button>
-    <a class="btn" href="/?lang={{.Lang}}">{{t .Lang "diff.skip"}}</a>
-  </form>
-</section>
-{{end}}
 
 <section class="card" id="step-4">
   <div class="card-head">
@@ -248,5 +247,6 @@
   <span>{{t .Lang "footer.loopback"}}</span>
   <span>{{t .Lang "footer.no_log"}}</span>
 </footer>
+<script src="/static/copy.js" defer></script>
 </body>
 </html>

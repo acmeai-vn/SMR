@@ -45,7 +45,7 @@ Both paths install the same daemon, use the same configuration file, and open th
 
 ## Install from a URL
 
-It installs the `smr` binary, registers a per-user background service, and opens the local setup page. It does not edit Codex or Claude Code configuration until you review and confirm the changes.
+It installs the `smr` binary, registers a per-user background service, and opens the local setup page. It never edits Codex or Claude Code configuration; step 3 shows the exact blocks you add yourself.
 
 ### macOS and Linux
 
@@ -95,14 +95,14 @@ Install without opening the setup page:
    - Linux: `~/.local/share/acmeai/smr/smr`
 5. On macOS/Linux, creates `~/.local/bin/smr` as a symlink. It never overwrites a regular file with that name.
 6. Registers a per-user background service:
-   - Windows: Task Scheduler at logon, or the per-user Run entry when task creation is denied.
+   - Windows: Task Scheduler at logon, or a shortcut in the per-user Startup folder when task creation is denied.
    - macOS: LaunchAgent `vn.acmeai.smr`.
    - Linux: `systemd --user` unit `smr.service`.
 7. Starts SMR on `127.0.0.1:8787` and its local UI on `127.0.0.1:8788`.
 8. Waits for `GET /health` before reporting success.
 9. Opens `smr setup` with a one-time token unless `--no-setup` or `--no-service` is set.
 
-The installer never writes provider keys into logs and never sends them to ACME AI. Running it again upgrades the binary and restarts the service without deleting your configuration or backups.
+The installer never writes provider keys into logs and never sends them to ACME AI. Running it again upgrades the binary, stops the old daemon, and restarts the service without deleting your configuration.
 
 If `~/.local/bin` is not on your `PATH`, add it or invoke the absolute path printed by the installer.
 
@@ -119,7 +119,7 @@ On macOS use `shasum -a 256` instead. The phase 1 release manifest is not crypto
 
 SMR is distributed as a marketplace plugin for Codex and Claude Code. Add the marketplace by URL; you do not need to clone the repository or know a local path. The plugin is a bootstrap and launcher: it registers the SMR setup workflow, and that workflow installs or updates the local daemon after showing the installer URL and getting confirmation. Routing still happens in the local daemon, not inside the agent process.
 
-Installing the plugin by itself does not edit Codex or Claude Code configuration. The setup skill handles detection, diff, confirmation, backup, and restore.
+Installing the plugin by itself does not edit Codex or Claude Code configuration. The setup skill detects both hosts and shows the exact blocks to add; you make the edit yourself.
 
 ### Codex
 
@@ -160,7 +160,7 @@ Then invoke the SMR skill and follow its setup flow. Restart Claude Code after S
 
 The setup page is a four-step flow:
 
-Opening `http://127.0.0.1:8798` by hand shows a short page explaining that the
+Opening `http://127.0.0.1:8788` by hand shows a short page explaining that the
 setup UI needs the token printed by `smr setup`. That is intentional: a random
 website in your browser must not be able to rewrite the local SMR config. If the
 daemon is not running, `smr setup` starts it before opening the browser.
@@ -172,9 +172,9 @@ daemon is not running, `smr setup` starts it before opening the browser.
    key. A key that passes the connection check is saved immediately.
 2. **Chọn model cho từng tier** — four tiers for the Codex profile and four for
    the Claude Code profile, in separate tabs.
-3. **Cài vào agent** — the pending change for `~/.codex/config.toml` and
-   `~/.claude/settings.json`, shown as a diff with explicit confirmation and a
-   backup. Skipping a host is allowed.
+3. **Cài vào agent** — what to add to `~/.codex/config.toml` and
+   `~/.claude/settings.json`, as copy-ready blocks. SMR never writes those
+   files: you paste the blocks, check the result, and restart the host.
 4. **Kiểm tra** — live counters for requests, the last tier and charge, and cache
    hits, plus a link to the log.
 
@@ -188,7 +188,7 @@ selected profile tab.
 
 The API key is stored in the SMR configuration file with user-only permissions. The full key is shown only once on `llm.acmeai.vn`; SMR cannot recover it later.
 
-The setup token is written to the data directory (`ui-token`) and is valid only for this process. Logs and host-config backups live in the same directory. On Windows and macOS the directory is under the per-user Application/Local data folder; on Linux it follows `XDG_DATA_HOME` and defaults to `~/.local/share/acmeai/smr`.
+The setup token is written to the data directory (`ui-token`) and is valid only for this process. Logs and the single-instance pid file live in the same directory. On Windows and macOS the directory is under the per-user Application/Local data folder; on Linux it follows `XDG_DATA_HOME` and defaults to `~/.local/share/acmeai/smr`.
 
 Useful commands:
 
@@ -198,39 +198,47 @@ Useful commands:
     smr restart
     smr update
     smr logs --tail 100
-    smr uninstall --restore
+    smr uninstall
 
 `smr serve` is the foreground process used by the background service. You normally do not run it directly.
 
 ## Host configuration
 
-SMR changes only the blocks it owns. It backs up each file before writing and shows a diff first.
+SMR never writes the Codex or Claude Code configuration files. A duplicate
+`model_provider` or a second `ANTHROPIC_API_KEY` can break a working setup in
+ways SMR cannot see, so the setup page shows the exact blocks and you apply
+them. Nothing here is needed if you already point the host at another router.
 
 ### Codex
 
-Adds or updates:
+Add the provider block and, separately, the default provider key:
 
     [model_providers.smr]
     name = "Smart Model Router"
     base_url = "http://127.0.0.1:8787/v1"
     wire_api = "responses"
 
-Setting `model_provider = "smr"` as the default is a separate confirmation. SMR does not make itself the default silently.
+Put `model_provider = "smr"` at the top of the file, before any `[table]`.
+TOML reads a top-level key that appears after a table as part of that table, so
+appending it at the end silently changes its meaning. SMR does not add that
+line itself; you decide whether to make SMR the default.
 
 ### Claude Code
 
-Adds or updates the following environment entries:
+Merge these entries into the existing `env` object in `settings.json`; do not
+replace the whole file:
 
     {
       "env": {
         "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
-        "ANTHROPIC_AUTH_TOKEN": "<local placeholder generated by SMR>"
+        "ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"
       }
     }
 
-The placeholder is not a secret. SMR replaces it with the Claude profile token when forwarding the request.
+The placeholder is not a secret. SMR replaces it with the Claude profile key
+when forwarding the request. Restart Claude Code after the edit.
 
-If you choose not to modify a host, SMR still runs and the other host can use it.
+If you only configure one host, SMR still runs and that host can use it.
 
 ## Configuration
 
@@ -255,7 +263,7 @@ Default locations:
 | macOS | `~/Library/Application Support/AcmeAI/SMR/config.yaml` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/acmeai/smr/config.yaml` |
 
-`ui-token`, `smr.log` and `backups/` sit beside the config file. The port and token paths can be overridden with `SMR_CONFIG` and `SMR_DATA_DIR`.
+`ui-token`, `daemon.pid` and `smr.log` sit beside the config file. The port and data paths can be overridden with `SMR_CONFIG` and `SMR_DATA_DIR`.
 
 A complete, commented example is in `config.example.yaml`. Minimal shape:
 
@@ -319,7 +327,7 @@ Top-up plans: 20,000 / 50,000 / 100,000 VND via TP Bank QR. The QR is shown for 
     smr update --check
     smr update --version v0.1.0
 
-`smr update` reads the release manifest, verifies the new archive, and asks before replacing the running binary. The previous binary is kept for rollback. A binary rollback does not touch configuration or host backups.
+`smr update` reads the release manifest, verifies the new archive, and asks before replacing the running binary. It stops the old daemon first, so the new build can bind the loopback port. The previous binary is kept for rollback; rolling back does not touch configuration.
 
 To reinstall a specific version with the URL installer:
 
@@ -336,7 +344,7 @@ Common cases:
 - **Claude Code returns 401:** the Claude profile needs an Anthropic-compatible API key/token. Claude Pro OAuth is not supported.
 - **Codex cannot find the provider:** restart Codex after `smr setup` confirms the change.
 - **402 from SMR:** top up at `https://llm.acmeai.vn/topup`. SMR will not call a model without balance.
-- **Port already in use:** change `listen` and `ui_listen`, save, then preview and re-apply the host config so its base URL matches the new port. Run `smr restart` afterwards.
+- **Port already in use:** change `listen` and `ui_listen`, save, then update the host base URL to match the new port. Run `smr restart` afterwards.
 - **Installer cannot find a release:** check that a tag and its release assets exist on GitHub Releases, then retry without `--version`.
 - **Installer checksum mismatch:** do not run the archive. Delete it and download again; report the release tag and asset name privately.
 - **macOS Gatekeeper blocks the binary:** phase 1 releases are not signed or notarized. Verify the checksum and follow the published install instructions. Signing is out of scope for phase 1.
@@ -353,9 +361,12 @@ Common cases:
 
 ## Uninstall
 
-    smr uninstall --restore
+    smr uninstall
 
-This removes the background service and restores host configuration from the latest backup. Add `--purge` to remove SMR configuration and cached state as well.
+This removes the background service. Add `--purge` to remove the SMR
+configuration and cached state as well. SMR never edited your host files, so
+there is nothing to restore; revert the blocks from the setup page by hand if
+you want to stop routing through SMR.
 
 ## Security and privacy
 

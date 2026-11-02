@@ -137,11 +137,14 @@ try {
 
     # A running daemon locks its own image. Stop it before the binary is
     # replaced, otherwise Windows leaves the path in a delete-pending state.
-    Get-CimInstance Win32_Process -Filter "Name='smr.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '\bserve\b' } |
+    # Match the daemon exactly: `smr serve` or `smr serve --background`.
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'smr*.exe' -and $_.CommandLine -match '\bserve(\s+--background)?\s*$' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        if (-not (Get-CimInstance Win32_Process -Filter "Name='smr.exe'" -ErrorAction SilentlyContinue)) { break }
+        $running = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'smr*.exe' -and $_.CommandLine -match '\bserve(\s+--background)?\s*$' }
+        if (-not $running) { break }
         Start-Sleep -Milliseconds 250
     }
 
@@ -184,6 +187,10 @@ try {
         Remove-Item -LiteralPath $startupShortcut -Force -ErrorAction SilentlyContinue
     }
 
+    # $registeredTask decides how the daemon starts below: a scheduled task must
+    # be started with Start-ScheduledTask, because schtasks /End cannot stop a
+    # process that Start-Process launched.
+    $registeredTask = $false
     if ($Autostart -ne "None") {
         $registered = $false
         if ($Autostart -eq "Auto" -or $Autostart -eq "Task") {
@@ -194,6 +201,7 @@ try {
                 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
                 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "Smart Model Router local daemon" -Force | Out-Null
                 $registered = $true
+                $registeredTask = $true
             } catch {
                 if ($Autostart -eq "Task") {
                     Fail "Scheduled task registration was denied: $($_.Exception.Message)"
@@ -226,43 +234,54 @@ try {
         if (-not $registered) {
             Write-Warning "Autostart is disabled. Start the daemon with: smr serve"
         }
+    } else {
+        Step "Autostart disabled (-NoService). Start SMR when needed with: smr serve"
     }
 
-    Step "Waiting for SMR to become healthy..."
-    $healthUrl = "http://127.0.0.1:8787/health"
-    $ready = $false
-    for ($i = 0; $i -lt 30; $i++) {
-        try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
-            if ($response.StatusCode -eq 200) {
-                $ready = $true
-                break
+    # -NoService installs the binary only, so there is nothing to wait for.
+    if ($Autostart -ne "None") {
+        Step "Waiting for SMR to become healthy..."
+        $healthUrl = "http://127.0.0.1:8787/health"
+        $ready = $false
+        for ($i = 0; $i -lt 30; $i++) {
+            try {
+                $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
+                if ($response.StatusCode -eq 200) {
+                    $ready = $true
+                    break
+                }
+            } catch {
             }
-        } catch {
+
+            if ($i -eq 0) {
+                # A daemon registered as a task must be started as a task; schtasks
+                # cannot stop a process that Start-Process launched.
+                if ($registeredTask) {
+                    Start-ScheduledTask -TaskName $taskName
+                } elseif (Test-Path -LiteralPath $binary) {
+                    Start-Process -FilePath $binary -ArgumentList "serve", "--background" -WindowStyle Hidden
+                }
+            }
+            Start-Sleep -Milliseconds 1000
         }
 
-        if ($i -eq 0 -and $Autostart -ne "None" -and (Test-Path -LiteralPath $binary)) {
-            Start-Process -FilePath $binary -ArgumentList "serve", "--background" -WindowStyle Hidden
+        if (-not $ready) {
+            $hit = $null
+            try {
+                $hit = Get-MpThreatDetection -ErrorAction Stop |
+                    Where-Object { ($_.Resources -join ";") -like "*$installDir*" } |
+                    Select-Object -First 1
+            } catch {
+            }
+            if ($hit) {
+                Write-Warning "Antivirus flagged this install: $($hit.ThreatName)"
+            }
+            if (-not (Test-Path -LiteralPath $binary)) {
+                Write-Warning "Antivirus removed $binary right after installation."
+            }
+            Write-Warning "Allow $installDir in your antivirus, then install again."
+            Fail "SMR did not answer /health at 127.0.0.1:8787. See $installDir\smr.log and docs/TROUBLESHOOTING-WINDOWS.md."
         }
-        Start-Sleep -Milliseconds 1000
-    }
-
-    if (-not $ready) {
-        $hit = $null
-        try {
-            $hit = Get-MpThreatDetection -ErrorAction Stop |
-                Where-Object { ($_.Resources -join ";") -like "*$installDir*" } |
-                Select-Object -First 1
-        } catch {
-        }
-        if ($hit) {
-            Write-Warning "Antivirus flagged this install: $($hit.ThreatName)"
-        }
-        if (-not (Test-Path -LiteralPath $binary)) {
-            Write-Warning "Antivirus removed $binary right after installation."
-        }
-        Write-Warning "Allow $installDir in your antivirus, then install again."
-        Fail "SMR did not answer /health at 127.0.0.1:8787. See $installDir\smr.log and docs/TROUBLESHOOTING-WINDOWS.md."
     }
 
     Step "Installed SMR $Version at $binary"

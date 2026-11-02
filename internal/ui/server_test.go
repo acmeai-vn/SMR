@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/acmeai-vn/SMR/internal/config"
-	"github.com/acmeai-vn/SMR/internal/hostcfg"
 	"github.com/acmeai-vn/SMR/internal/proxy"
 )
 
@@ -118,6 +117,9 @@ func TestDashboardLinkFollowsEnvironment(t *testing.T) {
 		"https://api.acmeai.vn":         "https://llm.acmeai.vn",
 		"":                              "https://llm.acmeai.vn",
 		"https://api.example.com":       "https://llm.acmeai.vn",
+		// A substring match used to send these to the testing dashboard.
+		"https://api.contest.example": "https://llm.acmeai.vn",
+		"https://api.latest.example":  "https://llm.acmeai.vn",
 	}
 	for baseURL, want := range cases {
 		if got, _ := dashboardFor(baseURL); got != want {
@@ -419,46 +421,217 @@ func TestSaveRejectsMissingCSRF(t *testing.T) {
 	}
 }
 
-func TestPreviewAndApplyHostDiff(t *testing.T) {
+// Enter in any step 2 field submits the first submit button in tree order.
+// That must be the hidden save button, not the step 1 connection test.
+func TestEnterInFormSavesInsteadOfTesting(t *testing.T) {
+	_, _, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	body := getBody(t, client, httpServer.URL+"/")
+
+	save := strings.Index(body, `class="default-submit"`)
+	test := strings.Index(body, `formaction="/test"`)
+	if save < 0 || test < 0 {
+		t.Fatalf("missing submit buttons (save=%d test=%d)", save, test)
+	}
+	if save > test {
+		t.Fatal("the connection-test button comes first; Enter would run /test instead of saving")
+	}
+}
+
+// Step 3 documents the edit instead of writing host files. A duplicate
+// model_provider or ANTHROPIC_API_KEY breaks the agent in ways SMR cannot see.
+func TestStepThreeShowsInstructionsAndNeverWritesHostFiles(t *testing.T) {
 	server, _, httpServer, client, _ := testUI(t)
 	authenticate(t, client, httpServer.URL)
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
 	path := filepath.Join(codexHome, "config.toml")
-	if err := os.WriteFile(path, []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+	original := "model = \"gpt-5\"\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := client.PostForm(httpServer.URL+"/hosts/preview", url.Values{
-		"csrf": {server.csrf},
-		"host": {hostcfg.Codex},
+
+	body := getBody(t, client, httpServer.URL+"/")
+	for _, want := range []string{
+		"SMR không ghi vào file cấu hình",
+		`model_provider = &#34;smr&#34;`,
+		`[model_providers.smr]`,
+		`base_url = &#34;http://127.0.0.1:8787/v1&#34;`,
+		`data-copy=`,
+		"/static/copy.js",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("step 3 is missing %q:\n%s", want, body)
+		}
+	}
+
+	after, _ := os.ReadFile(path)
+	if string(after) != original {
+		t.Fatalf("setup page changed the host file:\n%s", after)
+	}
+
+	for _, route := range []string{"/hosts/preview", "/hosts/apply"} {
+		resp, err := client.PostForm(httpServer.URL+route, url.Values{"csrf": {server.csrf}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s still answers with %d", route, resp.StatusCode)
+		}
+	}
+}
+
+// The /test form posts the URL the user typed. It used to save that URL only
+// when the key was new, so a successful check against testing snapped back to
+// production and the next save wrote the old URL again.
+func TestTestConnectionPersistsNewBaseURL(t *testing.T) {
+	classifier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/account" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"balance_vnd":25000,"max_state_chars":8000,"cache_ttl_seconds":600}`)
+	}))
+	defer classifier.Close()
+
+	server, manager, httpServer, client, configPath := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	cfg := manager.Snapshot()
+	cfg.Classifier.APIKey = "acme_sk_saved"
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.PostForm(httpServer.URL+"/test", url.Values{
+		"csrf":                {server.csrf},
+		"classifier_base_url": {classifier.URL},
+		"max_chars":           {"9000"},
+		"fallback_tier":       {"hard"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "Diff cho codex") {
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
 	}
-	change, err := hostcfg.Preview(hostcfg.Codex, server.dataDir)
-	if err != nil {
-		t.Fatal(err)
+
+	cfg = manager.Snapshot()
+	if cfg.Classifier.BaseURL != classifier.URL {
+		t.Fatalf("tested base URL was dropped: %q", cfg.Classifier.BaseURL)
 	}
-	resp, err = client.PostForm(httpServer.URL+"/hosts/apply", url.Values{
-		"csrf":     {server.csrf},
-		"host":     {hostcfg.Codex},
-		"expected": {change.ExpectedHash},
+	if cfg.Classifier.MaxChars != 9000 || cfg.Classifier.FallbackTier != "hard" {
+		t.Fatalf("tested settings were dropped: %#v", cfg.Classifier)
+	}
+	persisted, _ := os.ReadFile(configPath)
+	if !strings.Contains(string(persisted), classifier.URL) {
+		t.Fatalf("base URL not written to the config file:\n%s", persisted)
+	}
+}
+
+func TestTestConnectionEchoesSubmittedValuesOnFailure(t *testing.T) {
+	classifier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+	}))
+	defer classifier.Close()
+
+	server, _, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	resp, err := client.PostForm(httpServer.URL+"/test", url.Values{
+		"csrf":                {server.csrf},
+		"classifier_api_key":  {"acme_sk_wrong"},
+		"classifier_base_url": {classifier.URL},
+		"max_chars":           {"9000"},
+		"fallback_tier":       {"hard"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("apply status=%d", resp.StatusCode)
+		t.Fatalf("status=%d", resp.StatusCode)
 	}
-	updated, _ := os.ReadFile(path)
-	if !strings.Contains(string(updated), "[model_providers.smr]") {
-		t.Fatalf("host config not updated:\n%s", updated)
+	for _, want := range []string{classifier.URL, `value="9000"`, `value="hard" selected`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("failed check lost the submitted value %q:\n%s", want, body)
+		}
+	}
+}
+
+// Example: ACMEAI_BASE_URL is set. The file must still keep what the user
+// typed, the daemon must keep using the variable, and the page must say so.
+func TestEnvOverrideKeepsFileAndSaysSo(t *testing.T) {
+	_, manager, httpServer, client, configPath := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	t.Setenv("ACMEAI_BASE_URL", "https://api-testing.acmeai.vn")
+
+	cfg := manager.Snapshot()
+	cfg.Classifier.BaseURL = "https://api.acmeai.vn"
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.Snapshot().Classifier.BaseURL; got != "https://api-testing.acmeai.vn" {
+		t.Fatalf("runtime must keep the environment value, got %q", got)
+	}
+	persisted, _ := os.ReadFile(configPath)
+	if !strings.Contains(string(persisted), "https://api.acmeai.vn") {
+		t.Fatalf("file must keep the saved value:\n%s", persisted)
+	}
+
+	body := getBody(t, client, httpServer.URL+"/?saved=1")
+	if !strings.Contains(body, "biến môi trường") {
+		t.Fatalf("page does not explain the environment override:\n%s", body)
+	}
+	if strings.Contains(body, "Daemon dùng cấu hình mới cho request tiếp theo.") {
+		t.Fatal("page claims the saved value is live while an env var overrides it")
+	}
+}
+
+// A fifth profile used to render a clickable tab with no panel ever shown.
+func TestTabsCSSFollowsProfileCount(t *testing.T) {
+	_, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	cfg := manager.Snapshot()
+	for _, name := range []string{"extra1", "extra2", "extra3"} {
+		cfg.Profiles[name] = config.Profile{API: "responses", Auth: "bearer", Tiers: cfg.Profiles["codex"].Tiers}
+	}
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.Get(httpServer.URL + "/static/tabs.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("tabs.css status=%d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "nth-of-type(5):checked ~ .tab-panels > .tab-panel:nth-child(5)") {
+		t.Fatalf("tabs.css does not cover the fifth profile:\n%s", body)
+	}
+}
+
+// PowerShell needs the call operator before a quoted path; `"C:\...\smr.exe"
+// setup` fails with "Unexpected token 'setup'".
+func TestSetupCommandQuotesPathsPerShell(t *testing.T) {
+	windowsPath := `C:\Users\me\AppData\Local\AcmeAI\SMR\smr.exe`
+	if got := setupCommandFor("windows", windowsPath, false); got != `& "C:\Users\me\AppData\Local\AcmeAI\SMR\smr.exe" setup` {
+		t.Fatalf("windows command=%q", got)
+	}
+	if got := setupCommandFor("linux", "/home/me/.local/bin/smr", false); got != `"/home/me/.local/bin/smr" setup` {
+		t.Fatalf("posix command=%q", got)
+	}
+	if got := setupCommandFor("windows", windowsPath, true); got != "smr setup" {
+		t.Fatalf("PATH command=%q", got)
+	}
+	if got := setupCommandFor("windows", "", false); got != "smr setup" {
+		t.Fatalf("fallback command=%q", got)
 	}
 }
 

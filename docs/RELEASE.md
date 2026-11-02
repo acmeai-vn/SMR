@@ -106,7 +106,7 @@ Upload all files in one operation. Do not edit an asset after publication; publi
 
 4. Run the same flow with a deliberately bad checksum; it must stop before writing a binary.
 5. Test the Windows installer with `-NoService -NoSetup -NoPath` in a disposable Windows VM.
-6. Test install, upgrade, rollback, and `smr uninstall --restore` on Windows 11, macOS 14/15, and Ubuntu 22.04/24.04.
+6. Test install, upgrade, rollback, and `smr uninstall` on Windows 11, macOS 14/15, and Ubuntu 22.04/24.04.
 7. Confirm `smr serve` is the command used by the Linux unit, macOS LaunchAgent, and Windows scheduled task.
 
 ## Validate marketplace packages
@@ -139,7 +139,7 @@ Phase 1 also does not purchase or apply a Windows Authenticode certificate.
 - Roll back a bad release by publishing the previous manifest and assets under a new patch tag, or by having users run the installer with `--version`.
 - Keep the previous binary for `smr update` rollback.
 - Never delete release assets that users may be rolling back to.
-- Host configuration backups are separate from binary rollback and are restored with `smr uninstall --restore`.
+- SMR does not write Codex or Claude Code configuration, so there are no host backups to restore; the previous binary is what rollback replaces.
 
 ## Release checklist
 

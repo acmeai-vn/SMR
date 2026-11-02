@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +76,9 @@ type hostView struct {
 	hostcfg.Detection
 	Label   string
 	UsesSMR bool
+	// Parts are the copy-ready blocks the user pastes into the host file. SMR
+	// never writes that file: a duplicate key breaks the agent silently.
+	Parts []hostcfg.Part
 }
 
 // stepView drives the step navigation at the top of the page.
@@ -92,6 +97,9 @@ type testResult struct {
 	// Saved reports that the tested key was new and is now stored. Testing a
 	// valid key is the moment the user expects it to be kept.
 	Saved bool
+	// EnvOverride reports that ACMEAI_API_KEY or ACMEAI_BASE_URL is winning at
+	// runtime, so a successful save will not change what the daemon uses.
+	EnvOverride bool
 }
 
 type pageData struct {
@@ -116,10 +124,13 @@ type pageData struct {
 	Tiers            []string
 	Stats            proxy.Stats
 	Detections       []hostView
-	Change           *hostcfg.Change
-	Test             *testResult
-	Error            string
-	Notice           string
+	// EnvKeyOverride and EnvBaseURLOverride make the page say that an
+	// environment variable, not the saved file, supplies the live value.
+	EnvKeyOverride     bool
+	EnvBaseURLOverride bool
+	Test               *testResult
+	Error              string
+	Notice             string
 }
 
 type logsData struct {
@@ -131,7 +142,7 @@ type logsData struct {
 }
 
 // lockedData renders the page shown when someone opens the setup UI without
-// the token, for example by typing http://127.0.0.1:8798 into the address bar.
+// the token, for example by typing http://127.0.0.1:8788 into the address bar.
 type lockedData struct {
 	Lang      string
 	LangURLVI string
@@ -188,6 +199,7 @@ func New(manager *config.Manager, stats func() proxy.Stats, dataDir, token, vers
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", s.static))
+	mux.HandleFunc("GET /static/tabs.css", s.handleTabsCSS)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
@@ -195,10 +207,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", s.authorize(s.handleIndex))
 	mux.HandleFunc("POST /save", s.authorize(s.handleSave))
 	mux.HandleFunc("POST /test", s.authorize(s.handleTest))
-	mux.HandleFunc("POST /hosts/preview", s.authorize(s.handlePreview))
-	mux.HandleFunc("POST /hosts/apply", s.authorize(s.handleApply))
 	mux.HandleFunc("GET /logs", s.authorize(s.handleLogs))
 	return securityHeaders(mux)
+}
+
+// handleTabsCSS emits one rule per configured profile. The number of profiles
+// is not fixed, and the old four hardcoded rules left a fifth tab clickable
+// with no panel ever shown.
+func (s *Server) handleTabsCSS(w http.ResponseWriter, r *http.Request) {
+	names := profileNames(s.manager.Snapshot().Profiles)
+	var active, visible []string
+	for index := 1; index <= len(names); index++ {
+		active = append(active, fmt.Sprintf(".tabs > .tab-radio:nth-of-type(%d):checked ~ .tabbar > .tab:nth-child(%d)", index, index))
+		visible = append(visible, fmt.Sprintf(".tabs > .tab-radio:nth-of-type(%d):checked ~ .tab-panels > .tab-panel:nth-child(%d)", index, index))
+	}
+	var css strings.Builder
+	css.WriteString("/* Generated for the profiles in this config. */\n")
+	if len(names) > 0 {
+		css.WriteString(strings.Join(active, ",\n") + " {\n  background: var(--paper);\n  border-color: var(--line);\n  color: var(--ink);\n  box-shadow: inset 0 2px 0 var(--accent);\n}\n")
+		css.WriteString(strings.Join(visible, ",\n") + " { display: block; }\n")
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, css.String())
 }
 
 func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
@@ -241,10 +272,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Query().Get("saved") {
 	case "1":
-		data.Notice = tr(lang, "notice.saved")
-	}
-	if r.URL.Query().Get("applied") != "" {
-		data.Notice = trf(lang, "notice.applied", r.URL.Query().Get("applied"))
+		if data.EnvKeyOverride || data.EnvBaseURLOverride {
+			data.Notice = tr(lang, "notice.saved_env")
+		} else {
+			data.Notice = tr(lang, "notice.saved")
+		}
 	}
 	s.render(w, http.StatusOK, "page", data)
 }
@@ -288,6 +320,7 @@ func (s *Server) baseData(lang string) pageData {
 		data.APIKeyPlaceholder = tr(lang, "placeholder.key_saved")
 	}
 	data.DashboardURL, data.EnvironmentLabel = dashboardFor(cfg.Classifier.BaseURL)
+	data.EnvKeyOverride, data.EnvBaseURLOverride = config.EnvOverrides()
 	names := profileNames(cfg.Profiles)
 	for _, name := range names {
 		profile := cfg.Profiles[name]
@@ -309,11 +342,15 @@ func (s *Server) baseData(lang string) pageData {
 	}
 	data.activateTab("")
 	for _, detection := range hostcfg.Detect() {
-		data.Detections = append(data.Detections, hostView{
+		view := hostView{
 			Detection: detection,
 			Label:     profileLabel(detection.Host),
 			UsesSMR:   hostUsesSMR(detection, cfg.Listen),
-		})
+		}
+		if instructions, err := hostcfg.InstructionsFor(detection.Host, cfg.Listen); err == nil {
+			view.Parts = instructions.Parts
+		}
+		data.Detections = append(data.Detections, view)
 	}
 	data.Steps = buildSteps(cfg, data.Detections, data.Stats, lang)
 	data.Verified = data.Stats.Forwarded > 0
@@ -392,7 +429,10 @@ func dashboardFor(baseURL string) (string, string) {
 	if parsed, err := url.Parse(strings.TrimSpace(baseURL)); err == nil {
 		host = strings.ToLower(parsed.Hostname())
 	}
-	if strings.Contains(host, "testing") || strings.Contains(host, "test") {
+	// Match exact hosts, not a substring: `api.contest.example` or
+	// `api.latest.example` is not a testing environment.
+	if host == "api-testing.acmeai.vn" || host == "llm-testing.acmeai.vn" ||
+		strings.HasSuffix(host, "-testing.acmeai.vn") {
 		return "https://llm-testing.acmeai.vn", "Testing"
 	}
 	// Production needs no suffix: the badge would only add noise on the
@@ -498,20 +538,34 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	}
 	lang := s.language(w, r)
 	cfg := s.manager.Snapshot()
-	key := strings.TrimSpace(r.PostFormValue("classifier_api_key"))
-	if key == "" {
-		key = strings.TrimSpace(r.PostFormValue("api_key"))
+	formKey := strings.TrimSpace(r.PostFormValue("classifier_api_key"))
+	if formKey == "" {
+		formKey = strings.TrimSpace(r.PostFormValue("api_key"))
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(r.PostFormValue("classifier_base_url")), "/")
 	if baseURL == "" {
 		baseURL = cfg.Classifier.BaseURL
 	}
-	newKey := key != "" && key != cfg.Classifier.APIKey
+	key := formKey
 	if key == "" {
 		key = cfg.Classifier.APIKey
 	}
 	data := s.baseData(lang)
 	data.activateTab(r.PostFormValue("smr_tab"))
+	// Echo the submitted settings instead of the saved ones. Otherwise a failed
+	// check silently reverts the form to the previous environment.
+	data.Config.Classifier.BaseURL = baseURL
+	maxChars := cfg.Classifier.MaxChars
+	if maximum, ok := parseInt(r.PostFormValue("max_chars")); ok && maximum > 0 {
+		maxChars = int(maximum)
+		data.Config.Classifier.MaxChars = maxChars
+	}
+	fallback := cfg.Classifier.FallbackTier
+	if tier := strings.TrimSpace(r.PostFormValue("fallback_tier")); config.IsTier(tier) {
+		fallback = tier
+		data.Config.Classifier.FallbackTier = fallback
+	}
+	overrideKey, overrideBaseURL := config.EnvOverrides()
 	if key == "" {
 		data.Test = &testResult{Error: tr(lang, "error.no_key")}
 		s.render(w, http.StatusOK, "page", data)
@@ -520,26 +574,33 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	client := classifier.New(baseURL, key, 15*time.Second, 0)
 	account, err := client.Account(r.Context())
 	if err != nil {
-		data.Test = &testResult{Error: publicClassifierError(lang, err)}
+		data.Test = &testResult{Error: publicClassifierError(lang, err), EnvOverride: overrideKey || overrideBaseURL}
 	} else {
+		// Anything that just answered with a balance is known-good, so keep it
+		// instead of making the user paste the secret or the URL again.
 		saved := false
-		if newKey {
-			// A key that just answered with a balance is known-good, so keep it
-			// instead of making the user paste the secret a second time.
+		if formKey != "" && formKey != cfg.Classifier.APIKey {
 			cfg.Classifier.APIKey = key
+			saved = true
+		}
+		if baseURL != cfg.Classifier.BaseURL {
 			cfg.Classifier.BaseURL = baseURL
-			if maximum, ok := parseInt(r.PostFormValue("max_chars")); ok && maximum > 0 {
-				cfg.Classifier.MaxChars = int(maximum)
-			}
-			if tier := strings.TrimSpace(r.PostFormValue("fallback_tier")); config.IsTier(tier) {
-				cfg.Classifier.FallbackTier = tier
-			}
+			saved = true
+		}
+		if maxChars != cfg.Classifier.MaxChars {
+			cfg.Classifier.MaxChars = maxChars
+			saved = true
+		}
+		if fallback != cfg.Classifier.FallbackTier {
+			cfg.Classifier.FallbackTier = fallback
+			saved = true
+		}
+		if saved {
 			if updateErr := s.manager.Update(cfg); updateErr != nil {
 				data.Test = &testResult{Error: trf(lang, "error.test_save", updateErr.Error())}
 				s.render(w, http.StatusOK, "page", data)
 				return
 			}
-			saved = true
 		}
 		data.Test = &testResult{
 			OK:              true,
@@ -547,47 +608,10 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 			MaxStateChars:   account.MaxStateChars,
 			CacheTTLSeconds: account.CacheTTLSeconds,
 			Saved:           saved,
+			EnvOverride:     overrideKey || overrideBaseURL,
 		}
 	}
 	s.render(w, http.StatusOK, "page", data)
-}
-
-func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
-	if !s.checkCSRF(w, r) {
-		return
-	}
-	lang := s.language(w, r)
-	host := strings.TrimSpace(r.PostFormValue("host"))
-	cfg := s.manager.Snapshot()
-	change, err := hostcfg.PreviewFor(host, s.dataDir, cfg.Listen)
-	data := s.baseData(lang)
-	data.activateTab(r.PostFormValue("smr_tab"))
-	if err != nil {
-		data.Error = trf(lang, "error.preview", err.Error())
-		s.render(w, http.StatusBadRequest, "page", data)
-		return
-	}
-	data.Change = &change
-	s.render(w, http.StatusOK, "page", data)
-}
-
-func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
-	if !s.checkCSRF(w, r) {
-		return
-	}
-	lang := s.language(w, r)
-	host := strings.TrimSpace(r.PostFormValue("host"))
-	change := hostcfg.Change{Host: host, ExpectedHash: strings.TrimSpace(r.PostFormValue("expected"))}
-	cfg := s.manager.Snapshot()
-	if err := hostcfg.ApplyFor(change, s.dataDir, cfg.Listen); err != nil {
-		data := s.baseData(lang)
-		data.activateTab(r.PostFormValue("smr_tab"))
-		data.Error = trf(lang, "error.apply", err.Error())
-		s.render(w, http.StatusConflict, "page", data)
-		return
-	}
-	s.logger.Info("host config updated", "host", host)
-	http.Redirect(w, r, "/?applied="+url.QueryEscape(host)+"&lang="+lang, http.StatusSeeOther)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -627,7 +651,7 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, value an
 }
 
 // renderLocked explains how to authenticate instead of returning a bare error.
-// Opening http://127.0.0.1:8798 by hand used to print a one-line 401 that gave
+// Opening http://127.0.0.1:8788 by hand used to print a one-line 401 that gave
 // no hint about where to run the command.
 func (s *Server) renderLocked(w http.ResponseWriter, r *http.Request, invalid bool) {
 	lang := s.language(w, r)
@@ -647,13 +671,25 @@ func (s *Server) renderLocked(w http.ResponseWriter, r *http.Request, invalid bo
 // that has not reloaded PATH would only see "smr is not recognized". Showing the
 // absolute path keeps the instruction copy-pasteable.
 func setupCommand() string {
-	if _, err := exec.LookPath("smr"); err == nil {
+	_, err := exec.LookPath("smr")
+	exe, exeErr := os.Executable()
+	if exeErr != nil {
+		exe = ""
+	}
+	return setupCommandFor(runtime.GOOS, exe, err == nil)
+}
+
+// setupCommandFor builds the copy-pasteable command. PowerShell does not run a
+// quoted path as a command (it needs the call operator), so `"C:\...\smr.exe"
+// setup` fails with "Unexpected token 'setup'".
+func setupCommandFor(goos, exe string, onPath bool) string {
+	if onPath || exe == "" {
 		return "smr setup"
 	}
-	if exe, err := os.Executable(); err == nil {
-		return `"` + exe + `" setup`
+	if goos == "windows" {
+		return `& "` + exe + `" setup`
 	}
-	return "smr setup"
+	return `"` + exe + `" setup`
 }
 
 func securityHeaders(next http.Handler) http.Handler {

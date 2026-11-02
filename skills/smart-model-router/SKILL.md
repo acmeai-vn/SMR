@@ -29,7 +29,7 @@ SMR is a local daemon that classifies each coding request into one of four tiers
 
 4. The setup UI opens on `127.0.0.1:8788` with a one-time token. The user must enter the ACME AI API key in the UI, not in chat.
 
-5. Show the detected host configuration diff. Do not approve changes to Codex or Claude Code on the user's behalf. The user must confirm each host.
+5. Show the blocks the setup page prints for each detected host. SMR does not write `~/.codex/config.toml` or `~/.claude/settings.json`; hand the blocks to the user and let them edit and check the files.
 
 6. After confirmation, restart the affected host and verify:
 
@@ -41,12 +41,12 @@ SMR is a local daemon that classifies each coding request into one of four tiers
 ## Rules
 
 - Never ask the user to paste an API key, provider key, OAuth token, or session token into the conversation.
-- Do not edit `~/.codex/config.toml` or `~/.claude/settings.json` manually when `smr setup` can do it with a diff and backup.
+- Never edit `~/.codex/config.toml` or `~/.claude/settings.json` on the user's behalf. Show the blocks from step 3 of the setup page; a duplicate key breaks the host.
 - Do not set `model_provider = "smr"` as the Codex default unless the user explicitly agrees.
 - Claude Code requires an Anthropic-compatible API key/token. Claude Pro OAuth is unsupported.
 - Codex requires a provider API key. A ChatGPT Plus session is unsupported.
 - A 402 response is a hard stop. Do not work around it or switch to a more expensive model.
-- Do not run `smr uninstall --purge` without explicit confirmation; without `--restore`, host configuration is not reverted.
+- Do not run `smr uninstall --purge` without explicit confirmation. SMR never changed the host files, so the user reverts those blocks by hand.
 - If the user is on a host that cannot reach the network, stop and report it; do not fabricate a successful setup.
 
 ## Troubleshooting
@@ -59,6 +59,6 @@ SMR is a local daemon that classifies each coding request into one of four tiers
 | Codex does not use SMR | Confirm `model_provider = "smr"` was approved, then restart Codex |
 | Claude Code returns 401 | Profile needs a valid Anthropic-compatible API key/token |
 | Port already in use | Change `listen` or `ui_listen` in `config.yaml`, then `smr restart` |
-| Host config was changed unexpectedly | `smr uninstall --restore` restores the latest backup |
+| Host config has duplicate keys | Remove the duplicate by hand; SMR never writes these files |
 
 Use `smr logs --tail 100` for diagnostics. Never paste raw prompts or API keys into an issue.

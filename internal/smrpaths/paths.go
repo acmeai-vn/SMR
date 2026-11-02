@@ -22,7 +22,8 @@ func ConfigPath() (string, error) {
 	return filepath.Join(base, "config.yaml"), nil
 }
 
-// DataDir returns the directory for logs, backups and the local UI token.
+// DataDir returns the directory for logs, the single-instance pid file and the
+// local UI token.
 func DataDir() (string, error) {
 	if custom := os.Getenv("SMR_DATA_DIR"); custom != "" {
 		return custom, nil

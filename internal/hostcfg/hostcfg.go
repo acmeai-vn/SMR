@@ -1,28 +1,21 @@
-// Package hostcfg manages the small, reviewable changes SMR makes to Codex and
-// Claude Code configuration. Every change is backed up before it is written.
+// Package hostcfg detects Codex and Claude Code configuration and renders the
+// exact blocks a user must add to point a host at SMR. It never writes those
+// files: the user makes the edit and checks the result.
 package hostcfg
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
-
-	"github.com/acmeai-vn/SMR/internal/fileperm"
 )
 
 const (
 	Codex  = "codex"
 	Claude = "claude"
 
-	codexMarkerStart  = "# >>> SMR managed block"
-	codexMarkerEnd    = "# <<< SMR managed block"
 	claudePlaceholder = "smr-local-placeholder"
 	defaultListen     = "127.0.0.1:8787"
 )
@@ -39,24 +32,6 @@ type Detection struct {
 	// them. A code may carry one argument after a colon, such as
 	// "codex.env_key:OPENAI_API_KEY".
 	Notes []string `json:"notes,omitempty"`
-}
-
-type Change struct {
-	Host         string `json:"host"`
-	Path         string `json:"path"`
-	Before       string `json:"before"`
-	After        string `json:"after"`
-	Diff         string `json:"diff"`
-	Existed      bool   `json:"existed"`
-	ExpectedHash string `json:"expected_hash"`
-}
-
-type backupMeta struct {
-	Host       string `json:"host"`
-	Path       string `json:"path"`
-	Existed    bool   `json:"existed"`
-	BackupFile string `json:"backup_file,omitempty"`
-	CreatedAt  string `json:"created_at"`
 }
 
 func CodexPath() (string, error) {
@@ -191,294 +166,75 @@ func DetectClaude() (Detection, error) {
 	return detection, nil
 }
 
-func Preview(host, dataDir string) (Change, error) {
-	return PreviewFor(host, dataDir, defaultListen)
+// Part is one copyable piece of host configuration. Codex needs two: a
+// top-level key that must sit above every table, and the provider block.
+type Part struct {
+	TitleKey string
+	Code     string
 }
 
-// PreviewFor builds the proposed host config for the actual SMR listener. The
-// setup UI must use this form when the user changes listen or ui_listen.
-func PreviewFor(host, dataDir, listen string) (Change, error) {
+// Instructions is the host configuration a user must add by hand.
+type Instructions struct {
+	Host   string
+	Path   string
+	Exists bool
+	Parts  []Part
+}
+
+// InstructionsFor builds the blocks for one host. SMR never writes host
+// configuration: a second model_provider or a leftover ANTHROPIC_API_KEY
+// breaks the agent in ways the installer cannot see, and only the user knows
+// which provider should stay the default. Showing exact blocks keeps every
+// change visible and leaves the edit with the person who owns the file.
+func InstructionsFor(host, listen string) (Instructions, error) {
 	path, err := HostPath(host)
 	if err != nil {
-		return Change{}, err
+		return Instructions{}, err
 	}
 	listen = strings.TrimSpace(listen)
 	if listen == "" {
 		listen = defaultListen
 	}
-	beforeBytes, readErr := os.ReadFile(path)
-	existed := readErr == nil
-	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return Change{}, readErr
+	base := "http://" + listen
+	exists := false
+	if _, err := os.Stat(path); err == nil {
+		exists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Instructions{}, err
 	}
-	before := string(beforeBytes)
-	after, err := desired(host, before, existed, "http://"+listen)
-	if err != nil {
-		return Change{}, err
-	}
-	diff := LineDiff(before, after)
-	sum := sha256.Sum256([]byte(host + "\x00" + path + "\x00" + before + "\x00" + after))
-	return Change{
-		Host:         host,
-		Path:         path,
-		Before:       before,
-		After:        after,
-		Diff:         diff,
-		Existed:      existed,
-		ExpectedHash: hex.EncodeToString(sum[:]),
-	}, nil
-}
-
-func Apply(change Change, dataDir string) error {
-	return ApplyFor(change, dataDir, defaultListen)
-}
-
-// ApplyFor applies a preview produced for the current SMR listener.
-func ApplyFor(change Change, dataDir, listen string) error {
-	current, err := PreviewFor(change.Host, dataDir, listen)
-	if err != nil {
-		return err
-	}
-	if change.ExpectedHash == "" || current.ExpectedHash != change.ExpectedHash {
-		return fmt.Errorf("host config changed after preview; review the diff again")
-	}
-	if _, err := writeBackup(current, dataDir); err != nil {
-		return err
-	}
-	return writeFileAtomic(current.Path, []byte(current.After))
-}
-
-func desired(host, before string, existed bool, baseURL string) (string, error) {
+	result := Instructions{Host: host, Path: path, Exists: exists}
 	switch host {
 	case Codex:
-		return desiredCodex(before, existed, baseURL)
+		result.Parts = []Part{
+			{
+				TitleKey: "step3.codex.default",
+				Code:     `model_provider = "smr"`,
+			},
+			{
+				TitleKey: "step3.codex.block",
+				Code: strings.Join([]string{
+					"[model_providers.smr]",
+					`name = "Smart Model Router"`,
+					`base_url = "` + base + `/v1"`,
+					`wire_api = "responses"`,
+				}, "\n"),
+			},
+		}
 	case Claude:
-		return desiredClaude(before, existed, baseURL)
-	default:
-		return "", fmt.Errorf("unknown host %q", host)
-	}
-}
-
-func desiredCodex(before string, existed bool, baseURL string) (string, error) {
-	newline := "\n"
-	if strings.Contains(before, "\r\n") {
-		newline = "\r\n"
-	}
-	block := strings.Join([]string{
-		codexMarkerStart,
-		"[model_providers.smr]",
-		`name = "Smart Model Router"`,
-		`base_url = "` + baseURL + `/v1"`,
-		`wire_api = "responses"`,
-		codexMarkerEnd,
-	}, newline)
-	start := strings.Index(before, codexMarkerStart)
-	end := strings.Index(before, codexMarkerEnd)
-	if (start >= 0) != (end >= 0) || (start >= 0 && end < start) {
-		return "", fmt.Errorf("Codex config has an incomplete SMR marker block")
-	}
-	if start >= 0 {
-		end += len(codexMarkerEnd)
-		return before[:start] + block + before[end:], nil
-	}
-	trimmed := strings.TrimRight(before, "\r\n")
-	if !existed || trimmed == "" {
-		return block + newline, nil
-	}
-	return trimmed + newline + newline + block + newline, nil
-}
-
-func desiredClaude(before string, existed bool, baseURL string) (string, error) {
-	settings := make(map[string]any)
-	if existed && strings.TrimSpace(before) != "" {
-		if err := json.Unmarshal([]byte(before), &settings); err != nil {
-			return "", fmt.Errorf("Claude settings.json is not valid JSON; refusing to overwrite")
-		}
-	}
-	env := make(map[string]any)
-	if existing, ok := settings["env"].(map[string]any); ok {
-		for key, value := range existing {
-			env[key] = value
-		}
-	}
-	env["ANTHROPIC_BASE_URL"] = baseURL
-	env["ANTHROPIC_AUTH_TOKEN"] = claudePlaceholder
-	settings["env"] = env
-	body, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(body) + "\n", nil
-}
-
-func lineKind(current, desired string) string {
-	if current == "" {
-		return "new"
-	}
-	if desired == current {
-		return "same"
-	}
-	return "update"
-}
-
-func LineDiff(before, after string) string {
-	oldLines := strings.Split(strings.ReplaceAll(before, "\r\n", "\n"), "\n")
-	newLines := strings.Split(strings.ReplaceAll(after, "\r\n", "\n"), "\n")
-	var out strings.Builder
-	out.WriteString("--- current\n+++ proposed\n")
-	n, m := len(oldLines), len(newLines)
-	if n*m > 4_000_000 {
-		for _, line := range oldLines {
-			out.WriteString("- " + line + "\n")
-		}
-		for _, line := range newLines {
-			out.WriteString("+ " + line + "\n")
-		}
-		return out.String()
-	}
-	dp := make([][]int, n+1)
-	for i := range dp {
-		dp[i] = make([]int, m+1)
-	}
-	for i := n - 1; i >= 0; i-- {
-		for j := m - 1; j >= 0; j-- {
-			if oldLines[i] == newLines[j] {
-				dp[i][j] = dp[i+1][j+1] + 1
-			} else if dp[i+1][j] >= dp[i][j+1] {
-				dp[i][j] = dp[i+1][j]
-			} else {
-				dp[i][j] = dp[i][j+1]
-			}
-		}
-	}
-	i, j := 0, 0
-	for i < n && j < m {
-		switch {
-		case oldLines[i] == newLines[j]:
-			out.WriteString("  " + oldLines[i] + "\n")
-			i++
-			j++
-		case dp[i+1][j] >= dp[i][j+1]:
-			out.WriteString("- " + oldLines[i] + "\n")
-			i++
-		default:
-			out.WriteString("+ " + newLines[j] + "\n")
-			j++
-		}
-	}
-	for ; i < n; i++ {
-		out.WriteString("- " + oldLines[i] + "\n")
-	}
-	for ; j < m; j++ {
-		out.WriteString("+ " + newLines[j] + "\n")
-	}
-	return out.String()
-}
-
-func writeBackup(change Change, dataDir string) (string, error) {
-	hostDir := filepath.Join(dataDir, "backups", change.Host)
-	if err := os.MkdirAll(hostDir, 0o700); err != nil {
-		return "", err
-	}
-	stamp := time.Now().UTC().Format("20060102T150405.000000000")
-	meta := backupMeta{Host: change.Host, Path: change.Path, Existed: change.Existed, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	if change.Existed {
-		meta.BackupFile = stamp + ".bak"
-		if err := writeFileAtomic(filepath.Join(hostDir, meta.BackupFile), []byte(change.Before)); err != nil {
-			return "", err
-		}
-	}
-	body, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	metaPath := filepath.Join(hostDir, stamp+".json")
-	if err := writeFileAtomic(metaPath, body); err != nil {
-		return "", err
-	}
-	return metaPath, nil
-}
-
-func RestoreLatest(host, dataDir string) (string, error) {
-	expectedPath, err := HostPath(host)
-	if err != nil {
-		return "", err
-	}
-	hostDir := filepath.Join(dataDir, "backups", host)
-	entries, err := os.ReadDir(hostDir)
-	if err != nil {
-		return "", fmt.Errorf("no backup found for %s: %w", host, err)
-	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			names = append(names, entry.Name())
-		}
-	}
-	if len(names) == 0 {
-		return "", fmt.Errorf("no backup found for %s", host)
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
-	for _, name := range names {
-		body, err := os.ReadFile(filepath.Join(hostDir, name))
+		body, err := json.MarshalIndent(map[string]any{
+			"env": map[string]any{
+				"ANTHROPIC_BASE_URL":   base,
+				"ANTHROPIC_AUTH_TOKEN": claudePlaceholder,
+			},
+		}, "", "  ")
 		if err != nil {
-			continue
+			return Instructions{}, err
 		}
-		var meta backupMeta
-		if err := json.Unmarshal(body, &meta); err != nil || meta.Path != expectedPath {
-			continue
-		}
-		if meta.Existed {
-			if meta.BackupFile == "" {
-				continue
-			}
-			backup, err := os.ReadFile(filepath.Join(hostDir, meta.BackupFile))
-			if err != nil {
-				continue
-			}
-			if err := writeFileAtomic(meta.Path, backup); err != nil {
-				return "", err
-			}
-			return meta.Path, nil
-		}
-		if err := os.Remove(meta.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		return meta.Path, nil
+		result.Parts = []Part{{TitleKey: "step3.claude.block", Code: string(body)}}
+	default:
+		return Instructions{}, fmt.Errorf("unknown host %q", host)
 	}
-	return "", fmt.Errorf("no usable backup found for %s", host)
-}
-
-func writeFileAtomic(path string, body []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(dir, ".smr-*")
-	if err != nil {
-		return err
-	}
-	name := temp.Name()
-	defer os.Remove(name)
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return err
-	}
-	if _, err := temp.Write(body); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, path); err != nil {
-		return err
-	}
-	return fileperm.Restrict(path)
+	return result, nil
 }
 
 func stripComment(line string) string {

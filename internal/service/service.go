@@ -5,16 +5,20 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/acmeai-vn/SMR/internal/smrpaths"
 )
 
 const (
@@ -66,21 +70,32 @@ func HealthCheck(ctx context.Context, baseURL string) (Health, error) {
 func Restart(ctx context.Context) error {
 	switch runtime.GOOS {
 	case "windows":
-		_ = run(ctx, "schtasks", "/End", "/TN", windowsTask)
+		if err := stopWindowsServe(ctx); err != nil {
+			return err
+		}
 		if err := run(ctx, "schtasks", "/Run", "/TN", windowsTask); err == nil {
 			return nil
 		}
 		// Fall back to the Startup-folder entry used when task registration was
-		// denied. The helper restarts the daemon in place.
-		return runDetachedServe(ctx)
+		// denied.
+		return StartBackground()
 	case "darwin":
-		return run(ctx, "launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(os.Getuid())+"/"+macLabel)
+		if err := run(ctx, "launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(os.Getuid())+"/"+macLabel); err == nil {
+			return nil
+		}
+		return restartDetached(ctx)
 	default:
-		return run(ctx, "systemctl", "--user", "restart", linuxUnit)
+		if err := run(ctx, "systemctl", "--user", "restart", linuxUnit); err == nil {
+			return nil
+		}
+		return restartDetached(ctx)
 	}
 }
 
 func Uninstall(ctx context.Context) error {
+	// A daemon started by `smr setup` or by hand has no service manager to stop
+	// it, so use the pid file first.
+	_ = StopDetached()
 	switch runtime.GOOS {
 	case "windows":
 		_ = run(ctx, "schtasks", "/End", "/TN", windowsTask)
@@ -151,17 +166,77 @@ func windowsStartupShortcut() (string, error) {
 	return filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", windowsStartupShortcutName), nil
 }
 
-// stopServeScript matches only the background daemon. The CLI that calls
-// restart runs with a different final argument, so this never kills itself.
-const stopServeScript = `Get-CimInstance Win32_Process -Filter "Name='smr.exe'" | Where-Object { $_.CommandLine -match '\bserve\s*$' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`
+// serveCommandPattern matches the daemon process: `smr serve` or
+// `smr serve --background`, with nothing after it. Keep the PowerShell scripts
+// below in sync; they use the same expression. Lifecycle commands such as
+// `smr restart` and `smr update` never end in `serve`, so a command cannot
+// match, and kill, itself.
+const serveCommandPattern = `\bserve(\s+--background)?\s*$`
 
-// runDetachedServe stops the current daemon and starts a detached one. It is
-// the restart path when the machine never allowed a scheduled task to be
-// registered, so there is no task for schtasks to restart.
-func runDetachedServe(ctx context.Context) error {
+var serveCommandRegexp = regexp.MustCompile(serveCommandPattern)
+
+// isServeCommand reports whether a Windows command line belongs to the daemon.
+func isServeCommand(commandLine string) bool {
+	return serveCommandRegexp.MatchString(commandLine)
+}
+
+// Windows PowerShell cannot be tested from the Go test suite on another OS, so
+// the process lookup lives in one place and is verified by isServeCommand.
+// The process name is matched as smr*.exe because users rename the binary
+// (for example to smr-local.exe) and an update must still stop that daemon.
+const stopServeScript = `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'smr*.exe' -and $_.CommandLine -match '` + serveCommandPattern + `' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`
+
+const listServeScript = `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'smr*.exe' -and $_.CommandLine -match '` + serveCommandPattern + `' } | ForEach-Object { $_.ProcessId }`
+
+// stopWindowsServe ends every daemon started by any install path: the
+// scheduled task (End), the Startup-folder shortcut, and a manual
+// `smr serve --background` (process match). `install.ps1` mixed Start-Process
+// and scheduled tasks, which is why ending the task alone left the old build
+// running and the new one unable to bind the port.
+func stopWindowsServe(ctx context.Context) error {
+	_ = run(ctx, "schtasks", "/End", "/TN", windowsTask)
 	_ = run(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", stopServeScript)
+	output, err := outputOf(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", listServeScript)
+	if err != nil {
+		// Do not report a successful restart when the process list could not be
+		// read: starting now could bind-fail while the old daemon keeps serving.
+		return fmt.Errorf("verify that SMR stopped: %w", err)
+	}
+	leftover := strings.TrimSpace(output)
+	if leftover != "" {
+		return fmt.Errorf("SMR is still running (pid %s); stop it and try again", strings.Join(strings.Fields(leftover), ", "))
+	}
+	return nil
+}
 
+// restartDetached covers installs that skipped the service manager
+// (`--no-service`): stop the recorded daemon, then start a fresh one.
+func restartDetached(ctx context.Context) error {
+	if err := StopDetached(); err != nil {
+		return err
+	}
 	return StartBackground()
+}
+
+// StopDetached stops a daemon that is not managed by systemd or launchd, using
+// the single-instance pid file the daemon writes.
+func StopDetached() error {
+	dataDir, err := smrpaths.DataDir()
+	if err != nil {
+		return err
+	}
+	pid, running := readLockOwner(filepath.Join(dataDir, daemonPIDFile))
+	if !running {
+		return nil
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
 }
 
 // StartBackground launches the daemon detached from the current terminal. The
@@ -189,14 +264,19 @@ func StartBackground() error {
 }
 
 func run(ctx context.Context, name string, args ...string) error {
+	_, err := outputOf(ctx, name, args...)
+	return err
+}
+
+func outputOf(ctx context.Context, name string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message != "" {
-			return fmt.Errorf("%s: %s", name, message)
+			return string(output), fmt.Errorf("%s: %s", name, message)
 		}
-		return err
+		return string(output), err
 	}
-	return nil
+	return string(output), nil
 }

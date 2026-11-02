@@ -85,13 +85,25 @@ func emptyTiers() map[string]Tier {
 	return tiers
 }
 
-// Load reads config from disk. A missing file yields defaults so the setup UI
-// can run before the user has entered any provider credentials.
+// Load reads config from disk and then applies environment overrides. A
+// missing file yields defaults so the setup UI can run before the user has
+// entered any provider credentials.
 func Load(path string) (Config, error) {
+	cfg, err := loadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	applyEnv(&cfg)
+	return cfg, cfg.Validate()
+}
+
+// loadFile reads only the file. The manager keeps this view so a save never
+// copies an environment-provided secret into the file, and never overwrites a
+// value the user did not replace.
+func loadFile(path string) (Config, error) {
 	cfg := Default()
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		applyEnv(&cfg)
 		return cfg, cfg.Validate()
 	}
 	if err != nil {
@@ -101,7 +113,6 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
 	normalize(&cfg)
-	applyEnv(&cfg)
 	return cfg, cfg.Validate()
 }
 
@@ -162,12 +173,25 @@ func normalize(cfg *Config) {
 }
 
 func applyEnv(cfg *Config) {
-	if key := strings.TrimSpace(os.Getenv("ACMEAI_API_KEY")); key != "" {
+	if key, _ := envOverrides(); key != "" {
 		cfg.Classifier.APIKey = key
 	}
-	if baseURL := strings.TrimSpace(os.Getenv("ACMEAI_BASE_URL")); baseURL != "" {
-		cfg.Classifier.BaseURL = strings.TrimRight(baseURL, "/")
+	if _, baseURL := envOverrides(); baseURL != "" {
+		cfg.Classifier.BaseURL = baseURL
 	}
+}
+
+// EnvOverrides reports which classifier fields the process environment is
+// overriding. The setup page shows this so it never claims a saved value is in
+// effect when the daemon is actually using an environment variable.
+func EnvOverrides() (apiKey, baseURL bool) {
+	key, base := envOverrides()
+	return key != "", base != ""
+}
+
+func envOverrides() (apiKey, baseURL string) {
+	return strings.TrimSpace(os.Getenv("ACMEAI_API_KEY")),
+		strings.TrimRight(strings.TrimSpace(os.Getenv("ACMEAI_BASE_URL")), "/")
 }
 
 func (c Config) Validate() error {
@@ -300,9 +324,10 @@ func Save(path string, cfg Config) error {
 
 // Manager serializes config reads and writes between the proxy and local UI.
 type Manager struct {
-	mu   sync.RWMutex
-	path string
-	cfg  Config
+	mu    sync.RWMutex
+	path  string
+	cfg   Config
+	saved Config
 }
 
 func LoadManager(path string) (*Manager, error) {
@@ -310,7 +335,11 @@ func LoadManager(path string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{path: path, cfg: cfg}, nil
+	saved, err := loadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Manager{path: path, cfg: cfg, saved: saved}, nil
 }
 
 func (m *Manager) Path() string { return m.path }
@@ -323,22 +352,31 @@ func (m *Manager) Snapshot() Config {
 
 func (m *Manager) Update(cfg Config) error {
 	normalize(&cfg)
+	// Persist exactly what the user entered, including while an environment
+	// override is active. Dropping it made the page claim "saved" while the
+	// file kept an older value that would take effect once the variable was
+	// removed. Load still applies the environment last, so it keeps winning.
 	persist := clone(cfg)
-	// ACMEAI_API_KEY is intentionally an environment override. Never copy the
-	// environment secret into a file just because the user saved another field.
-	if strings.TrimSpace(os.Getenv("ACMEAI_API_KEY")) != "" {
-		persist.Classifier.APIKey = ""
+	envKey, envBaseURL := envOverrides()
+	m.mu.RLock()
+	previous := clone(m.saved)
+	m.mu.RUnlock()
+	// An unchanged environment value must not be copied into the file: that
+	// would turn a temporary variable into a stored secret and would also
+	// overwrite the value the file already had.
+	if envKey != "" && persist.Classifier.APIKey == envKey {
+		persist.Classifier.APIKey = previous.Classifier.APIKey
 	}
-	// ACMEAI_BASE_URL is the same kind of override: keep the file neutral so a
-	// testing URL never gets baked in by an unrelated settings save.
-	if strings.TrimSpace(os.Getenv("ACMEAI_BASE_URL")) != "" {
-		persist.Classifier.BaseURL = Default().Classifier.BaseURL
+	if envBaseURL != "" && persist.Classifier.BaseURL == envBaseURL {
+		persist.Classifier.BaseURL = previous.Classifier.BaseURL
 	}
 	if err := Save(m.path, persist); err != nil {
 		return err
 	}
+	applyEnv(&cfg)
 	m.mu.Lock()
 	m.cfg = clone(cfg)
+	m.saved = clone(persist)
 	m.mu.Unlock()
 	return nil
 }

@@ -134,3 +134,42 @@ func TestUpdateDoesNotPersistEnvOverrides(t *testing.T) {
 		t.Fatalf("edited field missing from file:\n%s", raw)
 	}
 }
+
+// The file keeps what it had when the environment supplies the live value, and
+// keeps a value the user actually typed.
+func TestUpdateKeepsFileValueBehindEnvOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	seed := Default()
+	seed.Classifier.BaseURL = "https://api-testing.acmeai.vn"
+	if err := Save(path, seed); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := LoadManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ACMEAI_BASE_URL", "https://api-testing.acmeai.vn")
+
+	cfg := manager.Snapshot()
+	cfg.Classifier.MaxChars = 12000
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), "https://api-testing.acmeai.vn") {
+		t.Fatalf("unrelated save rewrote the stored base URL:\n%s", raw)
+	}
+
+	cfg = manager.Snapshot()
+	cfg.Classifier.BaseURL = "https://api.acmeai.vn"
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if !strings.Contains(string(raw), "https://api.acmeai.vn") {
+		t.Fatalf("typed base URL was not saved:\n%s", raw)
+	}
+	if got := manager.Snapshot().Classifier.BaseURL; got != "https://api-testing.acmeai.vn" {
+		t.Fatalf("runtime must keep the environment value, got %q", got)
+	}
+}

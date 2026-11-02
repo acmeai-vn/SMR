@@ -23,8 +23,24 @@ if ($text -notmatch 'GetFolderPath\("Startup"\)') {
 }
 
 # The daemon locks its own image on Windows, so it has to be stopped before replacement.
-if ($text -notmatch "Name='smr\.exe'" -or $text.IndexOf("Name='smr.exe'") -gt $text.IndexOf("Move-Item")) {
-    throw "install.ps1 must stop running smr.exe before replacing the binary"
+if ($text -notmatch "Name -like 'smr\*\.exe'" -or $text.IndexOf("Name -like 'smr*.exe'") -gt $text.IndexOf("Move-Item")) {
+    throw "install.ps1 must stop running smr*.exe (including renamed builds) before replacing the binary"
+}
+if (-not $text.Contains('\bserve(\s+--background)?\s*$')) {
+    throw "install.ps1 must match the daemon command exactly, including the --background flag"
+}
+
+# A task-registered daemon must be started as a task: schtasks /End cannot stop
+# a process that Start-Process launched.
+if (-not $text.Contains('Start-ScheduledTask -TaskName $taskName')) {
+    throw "install.ps1 must start the registered task with Start-ScheduledTask"
+}
+
+# -NoService installs the binary only; waiting for /health would always fail.
+$wait = $text.IndexOf('Step "Waiting for SMR to become healthy..."')
+$guard = $text.LastIndexOf('if ($Autostart -ne "None") {', $wait)
+if ($wait -lt 0 -or $guard -lt 0) {
+    throw "install.ps1 must skip the health wait when autostart is disabled (-NoService)"
 }
 
 Write-Host "install.ps1 checks passed"

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -85,7 +86,7 @@ Usage:
   smr logs [--tail N]
   smr restart
   smr update [--check] [--version vX.Y.Z] [--yes]
-  smr uninstall [--restore] [--purge]
+  smr uninstall [--purge]
   smr migrate-config
   smr version`)
 }
@@ -112,6 +113,29 @@ func runServe(ctx context.Context, args []string) error {
 			return fmt.Errorf("create default config: %w", err)
 		}
 	}
+	// Take the single-instance lock before touching the token or the ports. A
+	// second start - an update, or `smr setup` racing a slow boot - must not
+	// replace the token the running daemon still expects.
+	lock, err := service.AcquireLock(dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+
+	cfg := manager.Snapshot()
+	proxyListener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", cfg.Listen, err)
+	}
+	defer proxyListener.Close()
+	uiListener, err := net.Listen("tcp", cfg.UIListen)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", cfg.UIListen, err)
+	}
+	defer uiListener.Close()
+
+	// Both ports belong to this process now, so a token written here always
+	// describes the daemon that serves the setup page.
 	token, err := ui.GenerateToken()
 	if err != nil {
 		return err
@@ -131,15 +155,12 @@ func runServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := manager.Snapshot()
 	proxyServer := &http.Server{
-		Addr:              cfg.Listen,
 		Handler:           router.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 	uiServer := &http.Server{
-		Addr:              cfg.UIListen,
 		Handler:           setupUI.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -149,11 +170,11 @@ func runServe(ctx context.Context, args []string) error {
 	errCh := make(chan error, 2)
 	go func() {
 		logger.Info("SMR listening", "addr", cfg.Listen, "version", version)
-		errCh <- proxyServer.ListenAndServe()
+		errCh <- proxyServer.Serve(proxyListener)
 	}()
 	go func() {
 		logger.Info("setup UI listening", "addr", cfg.UIListen)
-		errCh <- uiServer.ListenAndServe()
+		errCh <- uiServer.Serve(uiListener)
 	}()
 	fmt.Printf("SMR setup: http://%s/?token=%s\n", cfg.UIListen, token)
 
@@ -343,7 +364,6 @@ func runUpdate(ctx context.Context, args []string) error {
 
 func runUninstall(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	restore := flags.Bool("restore", false, "restore host config from backups")
 	purge := flags.Bool("purge", false, "remove SMR config and local state")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -351,16 +371,6 @@ func runUninstall(ctx context.Context, args []string) error {
 	configPath, dataDir, err := paths()
 	if err != nil {
 		return err
-	}
-	if *restore {
-		for _, host := range []string{hostcfg.Codex, hostcfg.Claude} {
-			path, err := hostcfg.RestoreLatest(host, dataDir)
-			if err != nil {
-				fmt.Printf("restore %s: skipped (%v)\n", host, err)
-				continue
-			}
-			fmt.Println("restored", path)
-		}
 	}
 	if err := service.Uninstall(ctx); err != nil {
 		fmt.Println("service removal:", err)

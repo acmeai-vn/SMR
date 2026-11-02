@@ -1,8 +1,9 @@
 # SMR configuration example.
 # Copy this file to the SMR data directory, then run `smr setup`.
 #
-# The setup UI is the recommended way to edit this file because it shows a diff
-# before changing Codex or Claude Code. Never commit real provider keys.
+# The setup UI is the recommended way to edit this file. It never changes the
+# Codex or Claude Code config files; it only shows the blocks you must add
+# there. Never commit real provider keys.
 #
 # ACMEAI_API_KEY can be set in the environment instead of classifier.api_key.
 

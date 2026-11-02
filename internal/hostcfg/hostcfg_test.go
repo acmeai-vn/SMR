@@ -3,178 +3,112 @@ package hostcfg
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
-func TestCodexPreviewApplyRestore(t *testing.T) {
+func codexAt(t *testing.T) string {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	path := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	original := "model = \"gpt-5\"\n\n[model_providers.other]\nbase_url = \"https://other.test/v1\"\n"
+	return path
+}
+
+// SMR documents host changes instead of writing them, so the snippets must be
+// complete and must not depend on the file already existing.
+func TestCodexInstructionsCoverBothEdits(t *testing.T) {
+	codexAt(t)
+	instructions, err := InstructionsFor(Codex, "127.0.0.1:18787")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instructions.Parts) != 2 {
+		t.Fatalf("parts=%d, want the default key and the provider block", len(instructions.Parts))
+	}
+	if instructions.Parts[0].Code != `model_provider = "smr"` {
+		t.Fatalf("default key snippet=%q", instructions.Parts[0].Code)
+	}
+	block := instructions.Parts[1].Code
+	if !strings.Contains(block, "[model_providers.smr]") ||
+		!strings.Contains(block, `base_url = "http://127.0.0.1:18787/v1"`) ||
+		!strings.Contains(block, `wire_api = "responses"`) {
+		t.Fatalf("provider block is incomplete:\n%s", block)
+	}
+}
+
+// The Codex top-level key and the table must stay separate snippets: pasting
+// model_provider after a [table] silently changes its meaning.
+func TestCodexDefaultKeyIsNotPartOfTheTable(t *testing.T) {
+	codexAt(t)
+	instructions, err := InstructionsFor(Codex, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(instructions.Parts[1].Code, "model_provider =") {
+		t.Fatal("the provider block must not include the top-level key")
+	}
+}
+
+func TestClaudeInstructionsUseEnvFragment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	instructions, err := InstructionsFor(Claude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !instructions.Exists {
+		t.Fatal("existing settings.json was not detected")
+	}
+	if len(instructions.Parts) != 1 {
+		t.Fatalf("parts=%d, want one env fragment", len(instructions.Parts))
+	}
+	code := instructions.Parts[0].Code
+	if !strings.Contains(code, `"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"`) ||
+		!strings.Contains(code, `"ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"`) {
+		t.Fatalf("env fragment=%s", code)
+	}
+}
+
+func TestInstructionsDoNotWriteHostFiles(t *testing.T) {
+	path := codexAt(t)
+	original := "model = \"gpt-5\"\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dataDir := t.TempDir()
-	change, err := Preview(Codex, dataDir)
+	if _, err := InstructionsFor(Codex, ""); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(change.After, "[model_providers.smr]") || !strings.Contains(change.Diff, "+ [model_providers.smr]") {
-		t.Fatalf("unexpected change: %s", change.Diff)
-	}
-	if err := Apply(change, dataDir); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(updated), "[model_providers.smr]") {
-		t.Fatal("provider block not written")
-	}
-	if _, err := RestoreLatest(Codex, dataDir); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(restored) != original {
-		t.Fatalf("restore mismatch:\n%s", restored)
+	if string(after) != original {
+		t.Fatalf("host file was modified:\n%s", after)
 	}
 }
 
-func TestCodexUpdatesManagedBlock(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
-	path := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	before := codexMarkerStart + "\n[model_providers.smr]\nbase_url = \"old\"\n" + codexMarkerEnd + "\n"
-	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	change, err := Preview(Codex, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(change.After, codexMarkerStart) != 1 || strings.Contains(change.After, `base_url = "old"`) {
-		t.Fatalf("managed block not replaced:\n%s", change.After)
+func TestInstructionsForUnknownHost(t *testing.T) {
+	if _, err := InstructionsFor("nope", ""); err == nil {
+		t.Fatal("expected an unknown-host error")
 	}
 }
 
-func TestPreviewForUsesConfiguredListener(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
-	change, err := PreviewFor(Codex, t.TempDir(), "127.0.0.1:18787")
-	if err != nil {
-		t.Fatal(err)
+func TestStripCommentAndUnquote(t *testing.T) {
+	if got := stripComment(`base_url = "https://x/#frag" # note`); got != `base_url = "https://x/#frag" ` {
+		t.Fatalf("stripComment=%q", got)
 	}
-	if !strings.Contains(change.After, `base_url = "http://127.0.0.1:18787/v1"`) {
-		t.Fatalf("custom listener missing from proposed config:\n%s", change.After)
-	}
-}
-
-func TestClaudePreviewPreservesOtherSettings(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
-	path := filepath.Join(home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	before := `{"theme":"dark","env":{"KEEP":"yes","ANTHROPIC_BASE_URL":"https://old.test"}}`
-	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	change, err := Preview(Claude, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(change.After, `"KEEP": "yes"`) || !strings.Contains(change.After, `"theme": "dark"`) {
-		t.Fatalf("unrelated settings lost:\n%s", change.After)
-	}
-	if !strings.Contains(change.After, `"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"`) {
-		t.Fatalf("base URL not updated:\n%s", change.After)
-	}
-}
-
-func TestClaudeInvalidJSONIsNotOverwritten(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
-	path := filepath.Join(home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Preview(Claude, t.TempDir()); err == nil {
-		t.Fatal("expected invalid JSON error")
-	}
-}
-
-func TestApplyRejectsStalePreview(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
-	path := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("model = \"one\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	change, err := Preview(Codex, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("model = \"two\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := Apply(change, t.TempDir()); err == nil || !strings.Contains(err.Error(), "changed after preview") {
-		t.Fatalf("expected stale error, got %v", err)
-	}
-}
-
-func TestRestoreDeletesFileThatDidNotExist(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
-	dataDir := t.TempDir()
-	change, err := Preview(Codex, dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Apply(change, dataDir); err != nil {
-		t.Fatal(err)
-	}
-	path, _ := CodexPath()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := RestoreLatest(Codex, dataDir); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("expected file to be removed, got %v", err)
-	}
-}
-
-func TestDiffShowsChanges(t *testing.T) {
-	diff := LineDiff("a\nb\n", "a\nc\n")
-	if !strings.Contains(diff, "- b") || !strings.Contains(diff, "+ c") {
-		t.Fatalf("bad diff:\n%s", diff)
-	}
-}
-
-func TestLineKind(t *testing.T) {
-	if runtime.GOOS == "" {
-		t.Fatal("unreachable")
-	}
-	if lineKind("a", "a") != "same" || lineKind("", "b") != "new" || lineKind("a", "b") != "update" {
-		t.Fatal("unexpected kind")
+	if got := unquote(` "value" `); got != "value" {
+		t.Fatalf("unquote=%q", got)
 	}
 }
