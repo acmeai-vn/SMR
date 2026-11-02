@@ -29,7 +29,7 @@ jobs:
           go vet ./...
 
       - name: Package
-        run: scripts/package-release.sh "${{ github.ref_name }}" dist
+        run: sh scripts/package-release.sh "${{ github.ref_name }}" dist
 
       - name: Publish
         env:
