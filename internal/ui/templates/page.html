@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMR Setup · ACME AI</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <span class="eyebrow">ACME AI</span>
+    <h1>Smart Model Router</h1>
+    <p class="muted">Cấu hình localhost · {{.Version}}</p>
+  </div>
+  <a class="btn" href="/logs">Xem log</a>
+</header>
+
+<main>
+{{if .Error}}<div class="notice error" role="alert">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="notice ok" role="status">{{.Notice}}</div>{{end}}
+
+<section class="grid status">
+  <div class="card"><span>Daemon</span><strong>Đang chạy</strong><small>{{.Stats.Requests}} request · {{.Stats.Forwarded}} đã forward</small></div>
+  <div class="card"><span>Classifier</span><strong>{{if .Stats.LastClassifierOK}}OK{{else}}Chưa xác nhận{{end}}</strong><small>{{if .Stats.LastClassifierAt}}{{.Stats.LastClassifierAt}}{{else}}Chưa gọi lần nào{{end}}</small></div>
+  <div class="card"><span>Lượt gần nhất</span><strong>{{if .Stats.LastTier}}{{.Stats.LastTier}}{{else}}—{{end}}</strong><small>{{.Stats.LastChargedVND}} VND · số dư {{.Stats.LastBalanceVND}} VND</small></div>
+  <div class="card"><span>Config</span><strong class="mono">{{.ConfigPath}}</strong><small>File quyền 0600</small></div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div><h2>Kết nối ACME AI</h2><p class="muted">Key chỉ lưu trên máy này. Ô để trống nghĩa là giữ key đã lưu.</p></div>
+  </div>
+  <form method="post" action="/test" class="inline-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>API key<input class="mono" type="password" name="api_key" autocomplete="off" placeholder="{{.APIKeyPlaceholder}}"></label>
+    <button class="btn" type="submit">Test connection</button>
+  </form>
+  {{if .Test}}
+  <div class="test-result {{if .Test.OK}}ok{{else}}error{{end}}">
+    {{if .Test.OK}}<strong>Kết nối thành công.</strong> Số dư {{.Test.BalanceVND}} VND · tối đa {{.Test.MaxStateChars}} ký tự · cache {{.Test.CacheTTLSeconds}} giây.
+    {{else}}<strong>Chưa kết nối được.</strong> {{.Test.Error}}{{end}}
+  </div>
+  {{end}}
+</section>
+
+<form method="post" action="/save">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <section class="card">
+    <h2>Cấu hình classifier</h2>
+    <div class="form-grid">
+      <label>Base URL<input name="classifier_base_url" value="{{.Config.Classifier.BaseURL}}" required></label>
+      <label>API key mới<input class="mono" type="password" name="classifier_api_key" autocomplete="off" placeholder="{{.APIKeyPlaceholder}}"></label>
+      <label>Max state chars<input type="number" name="max_chars" min="1000" max="100000" value="{{.Config.Classifier.MaxChars}}" required></label>
+      <label>Fallback tier
+        <select name="fallback_tier">
+          {{range .Tiers}}<option value="{{.}}" {{if eq . $.Config.Classifier.FallbackTier}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+    </div>
+  </section>
+
+  {{range .Profiles}}
+  {{$profile := .}}
+  <section class="card">
+    <div class="section-head"><div><h2>Profile {{.Name}}</h2><p class="muted">API {{.Profile.API}} · auth {{.Profile.Auth}}</p></div></div>
+    <div class="tier-table">
+      <div class="tier-head"><span>Tier</span><span>Base URL</span><span>Model</span><span>API key</span></div>
+      {{range .Tiers}}
+      <div class="tier-row">
+        <strong>{{.Name}}</strong>
+        <input name="{{$profile.Name}}_{{.Name}}_base_url" value="{{.BaseURL}}" placeholder="https://provider.example/v1">
+        <input name="{{$profile.Name}}_{{.Name}}_model" value="{{.Model}}" placeholder="model-name">
+        <input class="mono" type="password" name="{{$profile.Name}}_{{.Name}}_api_key" autocomplete="off" placeholder="{{.KeyPlaceholder}}">
+      </div>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
+
+  <div class="sticky-actions"><button class="btn primary" type="submit">Lưu cấu hình</button></div>
+</form>
+
+<section class="card">
+  <h2>Cấu hình host</h2>
+  <p class="muted">SMR chỉ thêm block/provider hoặc env của chính nó. Mọi thay đổi có diff và backup; không tự đặt làm mặc định.</p>
+  <div class="hosts">
+    {{range .Detections}}
+    <div class="host">
+      <div>
+        <h3>{{.Host}}</h3>
+        <p class="mono small">{{.Path}}</p>
+        {{if .Exists}}<p class="small">Đã có config.{{if .Provider}} Provider: {{.Provider}}.{{end}}{{if .BaseURL}} Base URL: {{.BaseURL}}.{{end}}{{if .Model}} Model: {{.Model}}.{{end}}</p>{{else}}<p class="small">Chưa có file cấu hình.</p>{{end}}
+        {{range .Notes}}<p class="note-line">{{.}}</p>{{end}}
+      </div>
+      <form method="post" action="/hosts/preview">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="host" value="{{.Host}}">
+        <button class="btn" type="submit">Xem diff & cài</button>
+      </form>
+    </div>
+    {{end}}
+  </div>
+</section>
+
+{{if .Change}}
+<section class="card">
+  <h2>Diff cho {{.Change.Host}}</h2>
+  <p class="mono small">{{.Change.Path}}</p>
+  <pre class="diff">{{.Change.Diff}}</pre>
+  <form method="post" action="/hosts/apply" class="actions">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="host" value="{{.Change.Host}}">
+    <input type="hidden" name="expected" value="{{.Change.ExpectedHash}}">
+    <button class="btn primary" type="submit">Xác nhận ghi thay đổi</button>
+    <a class="btn" href="/">Bỏ qua host này</a>
+  </form>
+</section>
+{{end}}
+</main>
+
+<footer>
+  <span>Chỉ bind loopback. Kết nối LAN bị từ chối.</span>
+  <span>Không log prompt, API key hoặc token.</span>
+</footer>
+</body>
+</html>

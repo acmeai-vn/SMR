@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log · SMR</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+<header class="top">
+  <div><span class="eyebrow">ACME AI</span><h1>Log gần đây</h1><p class="muted">{{.Path}}</p></div>
+  <a class="btn" href="/">Về cấu hình</a>
+</header>
+<main><section class="card"><pre class="logs">{{.Logs}}</pre></section></main>
+<footer><span>Log không chứa prompt, API key hay token.</span></footer>
+</body>
+</html>
