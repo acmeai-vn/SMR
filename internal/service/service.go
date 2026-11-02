@@ -46,6 +46,14 @@ type Health struct {
 	} `json:"classifier"`
 }
 
+// Signal budgets for stopping a detached daemon. The daemon drains in-flight
+// requests for up to 10 seconds after SIGTERM, so the graceful window has to be
+// longer than that. Tests shorten both.
+var (
+	terminateTimeout = 12 * time.Second
+	forceKillTimeout = 3 * time.Second
+)
+
 func HealthCheck(ctx context.Context, baseURL string) (Health, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/health", nil)
 	if err != nil {
@@ -67,35 +75,64 @@ func HealthCheck(ctx context.Context, baseURL string) (Health, error) {
 	return health, nil
 }
 
+// restartDeps is the per-OS part of Restart. Tests swap it out so every branch
+// is covered without stopping the daemon that runs them or calling schtasks.
+type restartDeps struct {
+	goos          string
+	uid           int
+	stopDetached  func() error
+	stopWindows   func(context.Context) error
+	command       func(context.Context, string, ...string) error
+	startDetached func() error
+}
+
 func Restart(ctx context.Context) error {
+	return restartWith(ctx, restartDeps{
+		goos:          runtime.GOOS,
+		uid:           os.Getuid(),
+		stopDetached:  StopDetached,
+		stopWindows:   stopWindowsServe,
+		command:       run,
+		startDetached: StartBackground,
+	})
+}
+
+func restartWith(ctx context.Context, deps restartDeps) error {
 	// A daemon started outside the service manager holds the data directory, so
 	// the process the service manager spawns would exit with ErrAlreadyRunning
 	// while systemctl/launchctl still report success. Stop it first; the pid
 	// file also covers --no-service installs.
-	if err := StopDetached(); err != nil {
+	if err := deps.stopDetached(); err != nil {
 		return err
 	}
-	switch runtime.GOOS {
-	case "windows":
-		if err := stopWindowsServe(ctx); err != nil {
+	restartDetached := func() error {
+		if err := deps.stopDetached(); err != nil {
 			return err
 		}
-		if err := run(ctx, "schtasks", "/Run", "/TN", windowsTask); err == nil {
+		return deps.startDetached()
+	}
+	switch deps.goos {
+	case "windows":
+		if err := deps.stopWindows(ctx); err != nil {
+			return err
+		}
+		if err := deps.command(ctx, "schtasks", "/Run", "/TN", windowsTask); err == nil {
 			return nil
 		}
 		// Fall back to the Startup-folder entry used when task registration was
 		// denied.
-		return StartBackground()
+		return restartDetached()
 	case "darwin":
-		if err := run(ctx, "launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(os.Getuid())+"/"+macLabel); err == nil {
+		label := "gui/" + strconv.Itoa(deps.uid) + "/" + macLabel
+		if err := deps.command(ctx, "launchctl", "kickstart", "-k", label); err == nil {
 			return nil
 		}
-		return restartDetached(ctx)
+		return restartDetached()
 	default:
-		if err := run(ctx, "systemctl", "--user", "restart", linuxUnit); err == nil {
+		if err := deps.command(ctx, "systemctl", "--user", "restart", linuxUnit); err == nil {
 			return nil
 		}
-		return restartDetached(ctx)
+		return restartDetached()
 	}
 }
 
@@ -216,15 +253,6 @@ func stopWindowsServe(ctx context.Context) error {
 	return nil
 }
 
-// restartDetached covers installs that skipped the service manager
-// (`--no-service`): stop the recorded daemon, then start a fresh one.
-func restartDetached(ctx context.Context) error {
-	if err := StopDetached(); err != nil {
-		return err
-	}
-	return StartBackground()
-}
-
 // StopDetached stops a daemon that is not managed by systemd or launchd, using
 // the single-instance pid file the daemon writes.
 func StopDetached() error {
@@ -270,7 +298,7 @@ func stopDetachedAt(path string) error {
 	if err := terminateProcess(process); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
-	if waitForExit(record.PID, 12*time.Second) {
+	if waitForExit(record.PID, terminateTimeout) {
 		return removePIDFile(path, record.PID)
 	}
 	// Still serving after the drain window: force it down so the next start
@@ -278,7 +306,7 @@ func stopDetachedAt(path string) error {
 	if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
-	if waitForExit(record.PID, 3*time.Second) {
+	if waitForExit(record.PID, forceKillTimeout) {
 		return removePIDFile(path, record.PID)
 	}
 	return fmt.Errorf("SMR pid %d did not exit", record.PID)
@@ -332,35 +360,63 @@ func processMatchesDaemon(record pidRecord) (bool, error) {
 }
 
 // matchesDaemon decides whether a live process is the one the pid file
-// recorded. exe may be empty: macOS ps prints argv unquoted, so a path with
-// spaces cannot always be recovered from the command line alone.
+// recorded. The image path is checked first: argv[0] is under the process's
+// control, so a daemon-shaped command line alone must not authorize a signal.
+// exe may be empty, or truncated at the first space by macOS ps.
 func matchesDaemon(record pidRecord, cmdline, exe string) bool {
 	if record.Exe == "" {
 		// Older pid file: the command line is the strongest signal left, and
-		// it already names the daemon.
+		// the caller already required it to end in `serve`.
 		return true
 	}
-	if executablePrefixesCommandLine(cmdline, record.Exe) {
-		// Unix argv is not quoted, so the recorded executable is a prefix of
-		// the command line even when the install path contains spaces.
+	if exe != "" && sameExecutable(exe, record.Exe) {
 		return true
 	}
-	if exe == "" {
-		return true
+	if exe != "" && !truncatedExecutable(exe, record.Exe) {
+		// A complete image path that is not the recorded one: this is either a
+		// different install or a reused pid.
+		return false
 	}
-	return sameExecutable(exe, record.Exe)
+	// The image path is unknown or truncated. Unix argv is not quoted, so the
+	// recorded executable is a prefix of the command line even when the
+	// install path contains spaces.
+	return executablePrefixesCommandLine(cmdline, record.Exe)
+}
+
+// truncatedExecutable reports whether exe looks like a prefix of recorded cut
+// at a space. macOS ps historically truncated the path there, and such a value
+// must not be read as "a different binary".
+func truncatedExecutable(exe, recorded string) bool {
+	if len(exe) == 0 || len(recorded) <= len(exe) {
+		return false
+	}
+	head := recorded[:len(exe)]
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		if !strings.EqualFold(head, exe) {
+			return false
+		}
+	} else if head != exe {
+		return false
+	}
+	return recorded[len(exe)] == ' ' || recorded[len(exe)] == '\t'
 }
 
 // executablePrefixesCommandLine reports whether cmdline starts with exe,
-// followed by the argument separator. The boundary check keeps "/opt/smr/smr"
-// from matching "/opt/smr/smr2".
+// followed by the argument separator. Windows quotes argv[0] when the path
+// contains spaces, which is accepted too. The boundary check keeps
+// "/opt/smr/smr" from matching "/opt/smr/smr2".
 func executablePrefixesCommandLine(cmdline, exe string) bool {
 	cmdline = strings.TrimSpace(cmdline)
 	exe = strings.TrimSpace(exe)
-	if exe == "" || len(cmdline) <= len(exe) {
+	if exe == "" || cmdline == "" {
 		return false
 	}
-	prefix := cmdline[:len(exe)]
+	quoted := strings.HasPrefix(cmdline, `"`)
+	head := strings.TrimPrefix(cmdline, `"`)
+	if len(head) <= len(exe) {
+		return false
+	}
+	prefix := head[:len(exe)]
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		if !strings.EqualFold(prefix, exe) {
 			return false
@@ -368,7 +424,10 @@ func executablePrefixesCommandLine(cmdline, exe string) bool {
 	} else if prefix != exe {
 		return false
 	}
-	rest := cmdline[len(exe):]
+	rest := head[len(exe):]
+	if quoted {
+		return len(rest) > 1 && rest[0] == '"' && (rest[1] == ' ' || rest[1] == '\t')
+	}
 	return rest[0] == ' ' || rest[0] == '\t'
 }
 

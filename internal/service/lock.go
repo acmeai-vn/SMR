@@ -60,10 +60,12 @@ func AcquireLock(dataDir string) (*Lock, error) {
 			// a stale pid reused after a reboot, so the file is replaced.
 			if verifyErr != nil && processAlive(record.PID) {
 				// Only a process that is still there blocks the start; it may
-				// have exited between the liveness check and the query.
-				return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, record.PID)
+				// have exited between the liveness check and the query. Keep
+				// the cause: otherwise the user only sees "already running"
+				// and has to delete the pid file by hand.
+				return nil, fmt.Errorf("%w (pid %d, cannot verify: %v)", ErrAlreadyRunning, record.PID, verifyErr)
 			}
-			if verifyErr == nil && match {
+			if match {
 				return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, record.PID)
 			}
 		}

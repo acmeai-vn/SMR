@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -269,6 +271,7 @@ func TestMatchesDaemonWithSpacesInExecutable(t *testing.T) {
 		{"ps comm present", exe + " serve", exe, true},
 		{"same prefix, different binary", exe + "2 serve", exe + "2", false},
 		{"different install", "/opt/smr/smr serve", "/opt/smr/smr", false},
+		{"spoofed argv, different image", exe + " serve", "/opt/other/smr", false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -285,5 +288,97 @@ func TestMatchesDaemonWithoutRecordedExecutable(t *testing.T) {
 	record := pidRecord{PID: 42}
 	if !matchesDaemon(record, "/opt/smr/smr serve", "") {
 		t.Fatal("old pid file no longer identifies the daemon")
+	}
+}
+
+// Windows quotes argv[0] when the install path contains spaces, so the prefix
+// check has to accept the closing quote as the argument boundary.
+func TestExecutablePrefixesCommandLine(t *testing.T) {
+	cases := []struct {
+		name    string
+		cmdline string
+		exe     string
+		want    bool
+	}{
+		{"unquoted", "/opt/smr/smr serve", "/opt/smr/smr", true},
+		{"quoted path with spaces", `"C:\Program Files\SMR\smr.exe" serve`, `C:\Program Files\SMR\smr.exe`, true},
+		{"quoted without arguments", `"/opt/smr/smr"`, "/opt/smr/smr", false},
+		{"prefix of a different binary", "/opt/smr/smr2 serve", "/opt/smr/smr", false},
+		{"no argument separator", "/opt/smr/smr-serve", "/opt/smr/smr", false},
+		{"empty image", "/opt/smr/smr serve", "", false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := executablePrefixesCommandLine(testCase.cmdline, testCase.exe); got != testCase.want {
+				t.Errorf("executablePrefixesCommandLine(%q, %q) = %v, want %v", testCase.cmdline, testCase.exe, got, testCase.want)
+			}
+		})
+	}
+}
+
+// restartWith has to fall through to a detached start when the service manager
+// is missing, and must never start a second daemon before stopping the first.
+func TestRestartWith(t *testing.T) {
+	cases := []struct {
+		name        string
+		goos        string
+		stopErr     error
+		managerErr  error
+		wantCommand string
+		wantStarts  int
+		wantErr     bool
+	}{
+		{name: "windows task", goos: "windows", wantCommand: "schtasks /Run /TN AcmeAI SMR", wantStarts: 0},
+		{name: "windows startup fallback", goos: "windows", managerErr: errors.New("no task"), wantCommand: "schtasks /Run /TN AcmeAI SMR", wantStarts: 1},
+		{name: "linux unit", goos: "linux", wantCommand: "systemctl --user restart smr.service", wantStarts: 0},
+		{name: "linux without unit", goos: "linux", managerErr: errors.New("no unit"), wantCommand: "systemctl --user restart smr.service", wantStarts: 1},
+		{name: "macOS launch agent", goos: "darwin", wantCommand: "launchctl kickstart -k gui/501/vn.acmeai.smr", wantStarts: 0},
+		{name: "macOS without agent", goos: "darwin", managerErr: errors.New("no agent"), wantCommand: "launchctl kickstart -k gui/501/vn.acmeai.smr", wantStarts: 1},
+		{name: "stop failure aborts", goos: "linux", stopErr: errors.New("cannot verify"), wantStarts: 0, wantErr: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var stopped, started int
+			var commands []string
+			deps := restartDeps{
+				goos:          testCase.goos,
+				uid:           501,
+				stopDetached:  func() error { stopped++; return testCase.stopErr },
+				stopWindows:   func(context.Context) error { return nil },
+				startDetached: func() error { started++; return nil },
+				command: func(_ context.Context, name string, args ...string) error {
+					commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+					if testCase.managerErr != nil {
+						return testCase.managerErr
+					}
+					return nil
+				},
+			}
+			err := restartWith(context.Background(), deps)
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("restartWith error = %v, wantErr %v", err, testCase.wantErr)
+			}
+			if started != testCase.wantStarts {
+				t.Errorf("detached starts = %d, want %d", started, testCase.wantStarts)
+			}
+			if testCase.wantErr {
+				if stopped != 1 || len(commands) != 0 {
+					t.Errorf("stopped = %d, commands = %v; want the stop to abort first", stopped, commands)
+				}
+				return
+			}
+			// The managed path stops once; the detached fallback stops before
+			// it starts so the new daemon does not hit ErrAlreadyRunning.
+			wantStops := 1
+			if testCase.wantStarts == 1 {
+				wantStops = 2
+			}
+			if stopped != wantStops {
+				t.Errorf("stops = %d, want %d", stopped, wantStops)
+			}
+			if len(commands) == 0 || commands[0] != testCase.wantCommand {
+				t.Fatalf("commands = %v, want first %q", commands, testCase.wantCommand)
+			}
+		})
 	}
 }
