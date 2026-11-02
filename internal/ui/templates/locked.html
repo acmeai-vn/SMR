@@ -38,8 +38,8 @@
     <li>{{t .Lang "locked.step1"}}</li>
     <li>{{t .Lang "locked.step2"}}
       <div class="locked-command">
-        <code class="mono">smr setup</code>
-        <button class="btn" type="button" data-copy="smr setup" data-copied="{{t .Lang "locked.copied"}}">{{t .Lang "locked.copy"}}</button>
+        <code class="mono">{{.Command}}</code>
+        <button class="btn" type="button" data-copy="{{.Command}}" data-copied="{{t .Lang "locked.copied"}}">{{t .Lang "locked.copy"}}</button>
       </div>
     </li>
     <li>{{t .Lang "locked.step3"}}</li>

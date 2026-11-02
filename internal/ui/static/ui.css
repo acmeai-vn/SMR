@@ -172,7 +172,8 @@ footer { display: flex; justify-content: space-between; gap: 16px; padding: 4px 
 .locked-steps { padding-left: 20px; color: var(--ink); font-size: 13px; }
 .locked-steps li { margin-bottom: 10px; }
 .locked-command { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 9px 12px; border: 1px dashed var(--line-strong); border-radius: 5px; background: var(--bg); }
-.locked-command code { font-family: var(--mono); font-size: 13px; }
+.locked-command code { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.locked-command .btn { flex: none; }
 .card.locked .hint { margin-top: 8px; }
 
 @media (max-width: 860px) {

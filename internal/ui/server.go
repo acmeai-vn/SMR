@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -138,6 +139,7 @@ type lockedData struct {
 	Version   string
 	TokenPath string
 	UIHost    string
+	Command   string
 	Invalid   bool
 }
 
@@ -636,8 +638,22 @@ func (s *Server) renderLocked(w http.ResponseWriter, r *http.Request, invalid bo
 		Version:   s.version,
 		TokenPath: filepath.Join(s.dataDir, tokenFile),
 		UIHost:    r.Host,
+		Command:   setupCommand(),
 		Invalid:   invalid,
 	})
+}
+
+// setupCommand prefers the short form, but users who installed SMR in a shell
+// that has not reloaded PATH would only see "smr is not recognized". Showing the
+// absolute path keeps the instruction copy-pasteable.
+func setupCommand() string {
+	if _, err := exec.LookPath("smr"); err == nil {
+		return "smr setup"
+	}
+	if exe, err := os.Executable(); err == nil {
+		return `"` + exe + `" setup`
+	}
+	return "smr setup"
 }
 
 func securityHeaders(next http.Handler) http.Handler {

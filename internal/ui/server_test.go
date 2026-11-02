@@ -170,10 +170,14 @@ func TestLockedPageExplainsHowToGetToken(t *testing.T) {
 	if strings.Contains(body, "Setup token required") {
 		t.Fatalf("bare error text still rendered:\n%s", body)
 	}
-	for _, want := range []string{"Cần mã truy cập", "smr setup", `data-copy="smr setup"`, "/static/copy.js"} {
+	for _, want := range []string{"Cần mã truy cập", "setup", `data-copy=`, "/static/copy.js"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("locked page missing %q:\n%s", want, body)
 		}
+	}
+	// The code block and the copy button must both carry the command.
+	if count := strings.Count(body, "setup"); count < 2 {
+		t.Fatalf("command appears %d time(s), want the code block and the copy button:\n%s", count, body)
 	}
 	if strings.Contains(body, "Mã truy cập không đúng") {
 		t.Fatalf("missing-token page must not claim the token is invalid")
