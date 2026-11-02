@@ -62,8 +62,15 @@ Install without opening the setup page:
 ### Windows
 
 Run PowerShell as your normal user. No administrator rights are required. When a machine denies
-scheduled-task creation, the installer falls back to a per-user `HKCU\...\Run` entry, which
-starts SMR at logon the same way.
+scheduled-task creation, the installer falls back to a shortcut in the per-user Startup folder,
+which starts SMR at logon the same way. The installer never writes `HKCU\...\Run`: Windows
+Defender classifies an unsigned binary that adds a Run entry as
+`Behavior:Win32/Persistence.A!ml` and quarantines it.
+
+If Defender quarantined an older build, clear the detection from protection history, add the
+install folder as an exclusion from an elevated PowerShell, and install again:
+
+    Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\AcmeAI\SMR"
 
     irm https://raw.githubusercontent.com/acmeai-vn/SMR/main/install.ps1 | iex
 
@@ -313,8 +320,15 @@ Common cases:
 - **Installer checksum mismatch:** do not run the archive. Delete it and download again; report the release tag and asset name privately.
 - **macOS Gatekeeper blocks the binary:** phase 1 releases are not signed or notarized. Verify the checksum and follow the published install instructions. Signing is out of scope for phase 1.
 - **Windows scheduled task blocked by policy:** the installer already falls back to a per-user
-  `HKCU\...\Run` entry, so no action is needed. If autostart is blocked entirely, run
+  Startup-folder shortcut, so no action is needed. If autostart is blocked entirely, run
   `smr serve` manually from a terminal.
+- **Windows Defender quarantines `smr.exe`:** releases up to v0.1.1 added a `HKCU\...\Run` entry,
+  which Defender classifies as persistence malware. Upgrade to v0.1.2 or later, remove the
+  detection from protection history, and add the install folder with
+  `Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\AcmeAI\SMR"` from an elevated PowerShell.
+- **Two SMR builds on one machine:** each build needs its own `listen`/`ui_listen` port and its own
+  config file. The installer always uses the per-user data directory; set `SMR_CONFIG` to run a
+  second build from a different file.
 
 ## Uninstall
 

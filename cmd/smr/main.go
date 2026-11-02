@@ -44,7 +44,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "serve":
-		err = runServe(ctx)
+		err = runServe(ctx, os.Args[2:])
 	case "setup":
 		err = runSetup(ctx)
 	case "status":
@@ -78,7 +78,7 @@ func usage() {
 	fmt.Println(`SMR - Smart Model Router
 
 Usage:
-  smr serve
+  smr serve [--background]
   smr setup
   smr status
   smr doctor
@@ -90,7 +90,15 @@ Usage:
   smr version`)
 }
 
-func runServe(ctx context.Context) error {
+func runServe(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	background := flags.Bool("background", false, "hide the console window; used by autostart")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *background {
+		hideConsoleWindow()
+	}
 	configPath, dataDir, err := paths()
 	if err != nil {
 		return err

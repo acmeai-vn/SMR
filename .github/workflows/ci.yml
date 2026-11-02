@@ -34,3 +34,7 @@ jobs:
       - name: Build
         run: go build ./cmd/smr
 
+      - name: Windows installer checks
+        shell: pwsh
+        run: ./scripts/check-install.ps1
+

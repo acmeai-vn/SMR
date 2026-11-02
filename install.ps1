@@ -4,7 +4,9 @@ param(
     [string]$Version = $env:SMR_VERSION,
     [switch]$NoSetup,
     [switch]$NoService,
-    [switch]$NoPath
+    [switch]$NoPath,
+    [ValidateSet("Auto", "Task", "Startup", "None")]
+    [string]$Autostart = "Auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,8 @@ try {
 if ($env:SMR_NO_SETUP -eq "1") { $NoSetup = $true }
 if ($env:SMR_NO_SERVICE -eq "1") { $NoService = $true }
 if ($env:SMR_NO_PATH -eq "1") { $NoPath = $true }
+if ($env:SMR_AUTOSTART) { $Autostart = $env:SMR_AUTOSTART }
+if ($NoService) { $Autostart = "None" }
 
 function Fail([string]$Message) {
     Write-Error $Message
@@ -123,6 +127,24 @@ try {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     }
 
+    # Releases up to v0.1.1 registered a HKCU Run entry. Defender classifies an
+    # unsigned binary that writes one as Behavior:Win32/Persistence.A!ml, so the
+    # entry is removed here and is never written again.
+    $legacyRunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    if (Test-Path -LiteralPath $legacyRunKey) {
+        Remove-ItemProperty -LiteralPath $legacyRunKey -Name $taskName -ErrorAction SilentlyContinue
+    }
+
+    # A running daemon locks its own image. Stop it before the binary is
+    # replaced, otherwise Windows leaves the path in a delete-pending state.
+    Get-CimInstance Win32_Process -Filter "Name='smr.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match '\bserve\b' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (-not (Get-CimInstance Win32_Process -Filter "Name='smr.exe'" -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 250
+    }
+
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     $binary = Join-Path $installDir "smr.exe"
     $newBinary = Join-Path $installDir ".smr.new.exe"
@@ -157,58 +179,95 @@ try {
         $env:Path = "$installDir;$env:Path"
     }
 
-    if (-not $NoService) {
-        Step "Registering the per-user background task..."
+    $startupShortcut = Join-Path ([Environment]::GetFolderPath("Startup")) "AcmeAI SMR.lnk"
+    if (Test-Path -LiteralPath $startupShortcut) {
+        Remove-Item -LiteralPath $startupShortcut -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($Autostart -ne "None") {
         $registered = $false
-        try {
-            $action = New-ScheduledTaskAction -Execute $binary -Argument "serve" -WorkingDirectory $installDir
-            $trigger = New-ScheduledTaskTrigger -AtLogOn
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "Smart Model Router local daemon" -Force | Out-Null
-            Start-ScheduledTask -TaskName $taskName
+        if ($Autostart -eq "Auto" -or $Autostart -eq "Task") {
+            Step "Registering the per-user background task..."
+            try {
+                $action = New-ScheduledTaskAction -Execute $binary -Argument "serve --background" -WorkingDirectory $installDir
+                $trigger = New-ScheduledTaskTrigger -AtLogOn
+                $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "Smart Model Router local daemon" -Force | Out-Null
+                $registered = $true
+            } catch {
+                if ($Autostart -eq "Task") {
+                    Fail "Scheduled task registration was denied: $($_.Exception.Message)"
+                }
+                Write-Verbose "Scheduled task registration was denied: $($_.Exception.Message)"
+            }
+        }
+
+        if (-not $registered -and ($Autostart -eq "Auto" -or $Autostart -eq "Startup")) {
+            # Some machines deny task creation to non-elevated users. SMR still
+            # installs without administrator rights, so the shortcut goes into
+            # the per-user Startup folder. A Run-key entry is never written:
+            # Defender treats it as malware persistence.
+            Step "Registering per-user autostart (Startup folder)..."
+            $startupDir = Split-Path -Parent $startupShortcut
+            if (-not (Test-Path -LiteralPath $startupDir)) {
+                New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
+            }
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut($startupShortcut)
+            $shortcut.TargetPath = $binary
+            $shortcut.Arguments = "serve --background"
+            $shortcut.WorkingDirectory = $installDir
+            $shortcut.WindowStyle = 7
+            $shortcut.Description = "Smart Model Router local daemon"
+            $shortcut.Save()
             $registered = $true
-        } catch {
-            Write-Warning "Scheduled task registration was denied: $($_.Exception.Message)"
         }
 
         if (-not $registered) {
-            # Some machines deny task creation to non-elevated users. SMR still
-            # installs without administrator rights, so fall back to the
-            # per-user Run entry that Windows expands at every logon.
-            Step "Falling back to per-user autostart (HKCU Run)..."
-            $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-            if (-not (Test-Path -LiteralPath $runKey)) {
-                New-Item -Path $runKey -Force | Out-Null
-            }
-            Set-ItemProperty -LiteralPath $runKey -Name $taskName -Value ('"' + $binary + '" serve')
+            Write-Warning "Autostart is disabled. Start the daemon with: smr serve"
+        }
+    }
 
-            Get-CimInstance Win32_Process -Filter "Name='smr.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -match '\bserve\s*$' } |
-                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            Start-Process -FilePath $binary -ArgumentList "serve" -WindowStyle Hidden
+    Step "Waiting for SMR to become healthy..."
+    $healthUrl = "http://127.0.0.1:8787/health"
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
+            if ($response.StatusCode -eq 200) {
+                $ready = $true
+                break
+            }
+        } catch {
         }
 
-        Step "Waiting for SMR to become healthy..."
-        $ready = $false
-        for ($i = 0; $i -lt 30; $i++) {
-            try {
-                $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8787/health" -TimeoutSec 2
-                if ($response.StatusCode -eq 200) {
-                    $ready = $true
-                    break
-                }
-            } catch {
-                Start-Sleep -Milliseconds 1000
-            }
+        if ($i -eq 0 -and $Autostart -ne "None" -and (Test-Path -LiteralPath $binary)) {
+            Start-Process -FilePath $binary -ArgumentList "serve", "--background" -WindowStyle Hidden
         }
-        if (-not $ready) {
-            Fail "SMR did not answer /health at 127.0.0.1:8787. Check Task Scheduler and the SMR log."
+        Start-Sleep -Milliseconds 1000
+    }
+
+    if (-not $ready) {
+        $hit = $null
+        try {
+            $hit = Get-MpThreatDetection -ErrorAction Stop |
+                Where-Object { ($_.Resources -join ";") -like "*$installDir*" } |
+                Select-Object -First 1
+        } catch {
         }
+        if ($hit) {
+            Write-Warning "Antivirus flagged this install: $($hit.ThreatName)"
+        }
+        if (-not (Test-Path -LiteralPath $binary)) {
+            Write-Warning "Antivirus removed $binary right after installation."
+        }
+        Write-Warning "Allow $installDir in your antivirus, then install again."
+        Fail "SMR did not answer /health at 127.0.0.1:8787. See $installDir\smr.log and docs/TROUBLESHOOTING-WINDOWS.md."
     }
 
     Step "Installed SMR $Version at $binary"
 
-    if (-not $NoSetup -and -not $NoService) {
+    if (-not $NoSetup -and $Autostart -ne "None") {
         & $binary setup
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Setup did not complete. Run: $binary setup"

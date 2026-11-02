@@ -19,12 +19,17 @@ import (
 
 const (
 	windowsTask = "AcmeAI SMR"
-	// windowsRunKey is the per-user autostart fallback. Some machines deny
-	// scheduled-task creation to non-elevated users, and the installers promise
-	// no administrator rights are needed.
-	windowsRunKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	macLabel      = "vn.acmeai.smr"
-	linuxUnit     = "smr.service"
+	// windowsStartupShortcutName is the per-user autostart fallback. Some
+	// machines deny scheduled-task creation to non-elevated users, and the
+	// installers promise no administrator rights are needed. The Startup folder
+	// is used instead of HKCU\Run because an unsigned binary writing a Run entry
+	// is what Defender classifies as Behavior:Win32/Persistence.A!ml.
+	windowsStartupShortcutName = "AcmeAI SMR.lnk"
+	// windowsLegacyRunKey only exists so upgrades can remove the Run entry that
+	// releases up to v0.1.1 created.
+	windowsLegacyRunKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	macLabel            = "vn.acmeai.smr"
+	linuxUnit           = "smr.service"
 )
 
 type Health struct {
@@ -65,7 +70,7 @@ func Restart(ctx context.Context) error {
 		if err := run(ctx, "schtasks", "/Run", "/TN", windowsTask); err == nil {
 			return nil
 		}
-		// Fall back to the per-user Run entry used when task registration was
+		// Fall back to the Startup-folder entry used when task registration was
 		// denied. The helper restarts the daemon in place.
 		return runDetachedServe(ctx)
 	case "darwin":
@@ -81,13 +86,20 @@ func Uninstall(ctx context.Context) error {
 		_ = run(ctx, "schtasks", "/End", "/TN", windowsTask)
 		taskErr := run(ctx, "schtasks", "/Delete", "/TN", windowsTask, "/F")
 		_ = run(ctx, "taskkill", "/IM", "smr.exe", "/F")
-		runErr := run(ctx, "reg", "delete", windowsRunKey, "/v", windowsTask, "/f")
+		_ = run(ctx, "reg", "delete", windowsLegacyRunKey, "/v", windowsTask, "/f")
+		shortcut, shortcutErr := windowsStartupShortcut()
+		if shortcutErr == nil {
+			shortcutErr = os.Remove(shortcut)
+			if os.IsNotExist(shortcutErr) {
+				shortcutErr = nil
+			}
+		}
 		// Removing either autostart mechanism counts as success; the other one
 		// was simply never installed.
-		if taskErr == nil || runErr == nil {
+		if taskErr == nil || shortcutErr == nil {
 			return nil
 		}
-		return taskErr
+		return fmt.Errorf("remove autostart: task: %v; startup shortcut: %w", taskErr, shortcutErr)
 	case "darwin":
 		_ = run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/"+macLabel)
 		home, err := os.UserHomeDir()
@@ -129,6 +141,16 @@ func OpenBrowser(ctx context.Context, target string) error {
 	}
 }
 
+// windowsStartupShortcut is the per-user autostart entry the Windows installer
+// writes when it cannot register a scheduled task.
+func windowsStartupShortcut() (string, error) {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return "", fmt.Errorf("APPDATA is not set")
+	}
+	return filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", windowsStartupShortcutName), nil
+}
+
 // stopServeScript matches only the background daemon. The CLI that calls
 // restart runs with a different final argument, so this never kills itself.
 const stopServeScript = `Get-CimInstance Win32_Process -Filter "Name='smr.exe'" | Where-Object { $_.CommandLine -match '\bserve\s*$' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`
@@ -143,7 +165,7 @@ func runDetachedServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	command := exec.Command(binary, "serve")
+	command := exec.Command(binary, "serve", "--background")
 	command.SysProcAttr = detachedSysProcAttr()
 	if err := command.Start(); err != nil {
 		return err
