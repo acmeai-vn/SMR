@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" width="480" height="260" role="img" aria-labelledby="flowTitle flowDesc">
+  <title id="flowTitle">Smart Model Router routes one coding request into one of four difficulty tiers</title>
+  <desc id="flowDesc">The coding agent sends one representative state to SMR. SMR asks the ACME AI classifier for a tier: easy, lower medium, upper medium or hard. SMR then forwards the original request, unchanged, to the model you configured for that tier: a cheap model, a balanced model, a strong model or the strongest model.</desc>
+
+  <defs>
+    <style>
+      .paper   { fill: #FBFBF8; }
+      .frame   { fill: none; stroke: #E3E6E0; stroke-width: 1; }
+      .eyebrow { fill: #8A968F; font: 600 8.5px/1 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; letter-spacing: .14em; }
+      .card    { fill: #F4F5F1; stroke: #CDD3CC; stroke-width: 1; }
+      .dot     { fill: #C9CFC8; }
+      .src-label { fill: #6C7A73; font: 500 8px/1 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      .src-line  { fill: #C9CFC8; opacity: .75; }
+      .chip      { fill: #DCEFE8; }
+      .chip-label { fill: #1C4A40; font: 700 7.5px/1 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; letter-spacing: .06em; }
+      .spine   { fill: none; stroke: #C9CFC8; stroke-width: 1; stroke-linecap: round; opacity: .85; }
+      .bus     { fill: none; stroke: #C9CFC8; stroke-width: 1; stroke-linecap: round; stroke-dasharray: 2 5; opacity: .8; }
+      .hub-orbit { fill: none; stroke: #C9CFC8; stroke-width: 1; stroke-dasharray: 2 5; opacity: .85; }
+      .hub-disc  { fill: #DCEFE8; stroke: #9CC4B6; stroke-width: 1; }
+      .hub-mark  { fill: none; stroke: #1C4A40; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+      .hub-mark-inner { opacity: .6; stroke-width: 2.1; }
+      .hub-label { fill: #6C7A73; font: 700 8.5px/1 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; letter-spacing: .14em; }
+      .tile      { fill: #FFFFFF; stroke: #E3E6E0; stroke-width: 1; }
+      .tile-tint { fill: #F1F6F3; }
+      .tier-name { fill: #33413B; font: 550 12px/1 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      .tier-model { fill: #6C7A73; font: 500 9.5px/1 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      .route  { fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 4 4.5; opacity: .85; }
+      .easy   { stroke: #6C9182; } .easy-fill   { fill: #7C9E8E; }
+      .lower  { stroke: #4A7B6A; } .lower-fill  { fill: #5B8877; }
+      .upper  { stroke: #2E655A; } .upper-fill  { fill: #2F6357; }
+      .hard   { stroke: #123B32; } .hard-fill   { fill: #123B32; }
+      .scan   { fill: #1C4A40; opacity: 0; }
+      @media (prefers-reduced-motion: reduce) {
+        .motion { display: none; }
+      }
+    </style>
+  </defs>
+
+  <rect class="paper" x="0" y="0" width="480" height="260" rx="8"/>
+  <rect class="frame" x="0.5" y="0.5" width="479" height="259" rx="8"/>
+
+  <text class="eyebrow" x="18" y="22">CODING AGENT</text>
+  <text class="eyebrow" x="462" y="22" text-anchor="end">4 TIERS → MODEL</text>
+
+  <!-- source -->
+  <g>
+    <rect class="card" x="18" y="52" width="124" height="124" rx="5"/>
+    <circle class="dot" cx="31" cy="65" r="2"/>
+    <circle class="dot" cx="38" cy="65" r="2"/>
+    <circle class="dot" cx="45" cy="65" r="2"/>
+    <text class="src-label" x="33" y="82">codex · claude code</text>
+    <rect class="src-line" x="33" y="93" width="92" height="5" rx="2.5"/>
+    <rect class="src-line" x="33" y="107" width="66" height="5" rx="2.5"/>
+    <rect class="src-line" x="33" y="121" width="84" height="5" rx="2.5"/>
+    <rect class="src-line" x="33" y="135" width="56" height="5" rx="2.5"/>
+    <rect class="chip" x="33" y="151" width="52" height="17" rx="3"/>
+    <text class="chip-label" x="41" y="163">1 request</text>
+    <rect class="scan" x="28" y="88" width="104" height="2" rx="1">
+      <animate class="motion" attributeName="opacity" values="0;0.85;0.4;0" keyTimes="0;0.15;0.6;0.72" dur="5s" repeatCount="indefinite"/>
+      <animateTransform class="motion" attributeName="transform" type="translate" values="0 0; 0 68; 0 68; 0 0" keyTimes="0;0.6;0.72;1" dur="5s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- wiring -->
+  <path class="spine" d="M142 114H172"/>
+
+  <!-- routes -->
+  <path class="route easy"  d="M230 114H250Q258 114 258 106V52Q258 44 266 44H312"/>
+  <path class="route lower" d="M230 114H254Q262 114 262 106V100Q262 92 270 92H312"/>
+  <path class="route upper" d="M230 114H258Q266 114 266 122V132Q266 140 274 140H312"/>
+  <path class="route hard"  d="M230 114H262Q270 114 270 122V180Q270 188 278 188H312"/>
+
+  <!-- packets -->
+  <g class="motion">
+    <circle class="easy-fill" r="3.2" cx="0" cy="0" opacity="0">
+      <animateMotion dur="8s" begin="0s" repeatCount="indefinite" path="M230 114H250Q258 114 258 106V52Q258 44 266 44H312"/>
+      <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.04;0.2;0.25;1" dur="8s" begin="0s" repeatCount="indefinite"/>
+    </circle>
+    <circle class="lower-fill" r="3.2" cx="0" cy="0" opacity="0">
+      <animateMotion dur="8s" begin="2s" repeatCount="indefinite" path="M230 114H254Q262 114 262 106V100Q262 92 270 92H312"/>
+      <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.04;0.2;0.25;1" dur="8s" begin="2s" repeatCount="indefinite"/>
+    </circle>
+    <circle class="upper-fill" r="3.2" cx="0" cy="0" opacity="0">
+      <animateMotion dur="8s" begin="4s" repeatCount="indefinite" path="M230 114H258Q266 114 266 122V132Q266 140 274 140H312"/>
+      <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.04;0.2;0.25;1" dur="8s" begin="4s" repeatCount="indefinite"/>
+    </circle>
+    <circle class="hard-fill" r="3.2" cx="0" cy="0" opacity="0">
+      <animateMotion dur="8s" begin="6s" repeatCount="indefinite" path="M230 114H262Q270 114 270 122V180Q270 188 278 188H312"/>
+      <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.04;0.2;0.25;1" dur="8s" begin="6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- hub -->
+  <g>
+    <circle class="hub-orbit" cx="200" cy="114" r="39">
+      <animateTransform class="motion" attributeName="transform" type="rotate" from="0 200 114" to="360 200 114" dur="26s" repeatCount="indefinite"/>
+    </circle>
+    <circle class="hub-disc" cx="200" cy="114" r="30"/>
+    <path class="hub-mark" d="M190 122 200 99 210 122"/>
+    <path class="hub-mark hub-mark-inner" d="M194 130 200 115 206 130"/>
+    <text class="hub-label" x="200" y="161" text-anchor="middle">SMR</text>
+    <circle class="motion" cx="200" cy="114" r="30" fill="none" stroke="#1C4A40" stroke-width="1.2" opacity="0">
+      <animate attributeName="r" values="30;46" dur="2.6s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.45;0" dur="2.6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- tiers -->
+  <g>
+    <rect class="tile" x="312" y="23" width="150" height="42" rx="4"/>
+    <rect x="313" y="24" width="148" height="40" rx="3.5" fill="#EEF5F1"/>
+    <rect x="312" y="23" width="150" height="42" rx="4" fill="none" stroke="#A9C4B6" stroke-width="1.15"/>
+    <circle class="easy-fill" cx="326" cy="44" r="4"/>
+    <text class="tier-name" x="338" y="41">Easy</text>
+    <text class="tier-model" x="338" y="56">cheap model</text>
+  </g>
+  <g>
+    <rect class="tile" x="312" y="71" width="150" height="42" rx="4"/>
+    <rect x="313" y="72" width="148" height="40" rx="3.5" fill="#E9F2ED"/>
+    <rect x="312" y="71" width="150" height="42" rx="4" fill="none" stroke="#79A191" stroke-width="1.15"/>
+    <circle class="lower-fill" cx="326" cy="92" r="4"/>
+    <text class="tier-name" x="338" y="89">Lower medium</text>
+    <text class="tier-model" x="338" y="104">balanced model</text>
+  </g>
+  <g>
+    <rect class="tile" x="312" y="119" width="150" height="42" rx="4"/>
+    <rect x="313" y="120" width="148" height="40" rx="3.5" fill="#E3EDE7"/>
+    <rect x="312" y="119" width="150" height="42" rx="4" fill="none" stroke="#3F7466" stroke-width="1.15"/>
+    <circle class="upper-fill" cx="326" cy="140" r="4"/>
+    <text class="tier-name" x="338" y="137">Upper medium</text>
+    <text class="tier-model" x="338" y="152">strong model</text>
+  </g>
+  <g>
+    <rect class="tile" x="312" y="167" width="150" height="42" rx="4"/>
+    <rect x="313" y="168" width="148" height="40" rx="3.5" fill="#DDE8E2"/>
+    <rect x="312" y="167" width="150" height="42" rx="4" fill="none" stroke="#1C4A40" stroke-width="1.15"/>
+    <circle class="hard-fill" cx="326" cy="188" r="4"/>
+    <text class="tier-name" x="338" y="185">Hard</text>
+    <text class="tier-model" x="338" y="200">strongest model</text>
+  </g>
+
+  <text class="eyebrow" x="18" y="246">ONE REPRESENTATIVE STATE · ORIGINAL REQUEST FORWARDED UNCHANGED</text>
+</svg>
