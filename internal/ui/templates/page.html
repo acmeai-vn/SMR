@@ -25,7 +25,7 @@
   <div class="card"><span>Daemon</span><strong>Đang chạy</strong><small>{{.Stats.Requests}} request · {{.Stats.Forwarded}} đã forward</small></div>
   <div class="card"><span>Classifier</span><strong>{{if .Stats.LastClassifierOK}}OK{{else}}Chưa xác nhận{{end}}</strong><small>{{if .Stats.LastClassifierAt}}{{.Stats.LastClassifierAt}}{{else}}Chưa gọi lần nào{{end}}</small></div>
   <div class="card"><span>Lượt gần nhất</span><strong>{{if .Stats.LastTier}}{{.Stats.LastTier}}{{else}}—{{end}}</strong><small>{{.Stats.LastChargedVND}} VND · số dư {{.Stats.LastBalanceVND}} VND</small></div>
-  <div class="card"><span>Config</span><strong class="mono">{{.ConfigPath}}</strong><small>File quyền 0600</small></div>
+  <div class="card"><span>Config</span><strong class="mono">{{.ConfigPath}}</strong><small>Chỉ user hiện tại có quyền ghi</small></div>
 </section>
 
 <section class="card">
@@ -65,6 +65,7 @@
   {{$profile := .}}
   <section class="card">
     <div class="section-head"><div><h2>Profile {{.Name}}</h2><p class="muted">API {{.Profile.API}} · auth {{.Profile.Auth}}</p></div></div>
+    {{if eq .Name "claude"}}<div class="notice warn" role="note"><strong>Claude Code cần API key/token Anthropic tương thích.</strong> Claude Pro OAuth không được hỗ trợ và không thể dùng làm credential cho profile này.</div>{{end}}
     <div class="tier-table">
       <div class="tier-head"><span>Tier</span><span>Base URL</span><span>Model</span><span>API key</span></div>
       {{range .Tiers}}
@@ -85,6 +86,7 @@
 <section class="card">
   <h2>Cấu hình host</h2>
   <p class="muted">SMR chỉ thêm block/provider hoặc env của chính nó. Mọi thay đổi có diff và backup; không tự đặt làm mặc định.</p>
+  <div class="notice warn" role="note"><strong>Trước khi cài Claude Code:</strong> profile Claude phải có Anthropic API key/token tương thích. Claude Pro OAuth không được hỗ trợ.</div>
   <div class="hosts">
     {{range .Detections}}
     <div class="host">

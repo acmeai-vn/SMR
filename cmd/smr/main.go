@@ -22,6 +22,7 @@ import (
 
 	"github.com/acmeai-vn/SMR/internal/classifier"
 	"github.com/acmeai-vn/SMR/internal/config"
+	"github.com/acmeai-vn/SMR/internal/fileperm"
 	"github.com/acmeai-vn/SMR/internal/hostcfg"
 	"github.com/acmeai-vn/SMR/internal/logtail"
 	"github.com/acmeai-vn/SMR/internal/proxy"
@@ -421,7 +422,9 @@ func paths() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if err := smrpaths.EnsureDir(filepath.Dir(configPath)); err != nil {
+	// A custom SMR_CONFIG may point into a shared directory. Create the parent
+	// but do not replace its ACL; the config file itself is restricted.
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return "", "", err
 	}
 	if err := smrpaths.EnsureDir(dataDir); err != nil {
@@ -434,6 +437,10 @@ func openLog(dataDir string) (*os.File, error) {
 	path := filepath.Join(dataDir, ui.LogFile)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		return nil, err
+	}
+	if err := fileperm.Restrict(path); err != nil {
+		file.Close()
 		return nil, err
 	}
 	return file, nil

@@ -57,3 +57,17 @@ func TestEnvOverridesAPIKey(t *testing.T) {
 		t.Fatalf("got %q", loaded.Classifier.APIKey)
 	}
 }
+
+func TestExampleConfigLoads(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("config.example.yaml is invalid: %v", err)
+	}
+	for _, profile := range []string{"codex", "claude"} {
+		for _, tier := range Tiers {
+			if cfg.Profiles[profile].Tiers[tier].Model == "" {
+				t.Fatalf("config.example.yaml is missing %s/%s", profile, tier)
+			}
+		}
+	}
+}

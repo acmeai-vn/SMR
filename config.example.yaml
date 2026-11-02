@@ -1,0 +1,65 @@
+# SMR configuration example.
+# Copy this file to the SMR data directory, then run `smr setup`.
+#
+# The setup UI is the recommended way to edit this file because it shows a diff
+# before changing Codex or Claude Code. Never commit real provider keys.
+#
+# ACMEAI_API_KEY can be set in the environment instead of classifier.api_key.
+
+listen: "127.0.0.1:8787"
+ui_listen: "127.0.0.1:8788"
+chat_completions_profile: codex
+
+classifier:
+  base_url: "https://api.acmeai.vn"
+  api_key: "acme_sk_replace_with_your_key"
+  timeout_ms: 15000
+  max_chars: 12000
+  retry: 1
+  on_transient_error: fallback
+  fallback_tier: upper_medium
+
+profiles:
+  codex:
+    api: responses
+    auth: bearer
+    tiers:
+      easy:
+        base_url: "https://api.openai.com/v1"
+        api_key: "replace-with-codex-provider-key"
+        model: "replace-with-easy-model"
+      lower_medium:
+        base_url: "https://api.openai.com/v1"
+        api_key: "replace-with-codex-provider-key"
+        model: "replace-with-lower-medium-model"
+      upper_medium:
+        base_url: "https://api.openai.com/v1"
+        api_key: "replace-with-codex-provider-key"
+        model: "replace-with-upper-medium-model"
+      hard:
+        base_url: "https://api.openai.com/v1"
+        api_key: "replace-with-codex-provider-key"
+        model: "replace-with-hard-model"
+
+  claude:
+    api: messages
+    auth: x-api-key
+    anthropic_version: "2023-06-01"
+    tiers:
+      easy:
+        base_url: "https://api.anthropic.com"
+        api_key: "replace-with-anthropic-compatible-key"
+        model: "replace-with-easy-model"
+      lower_medium:
+        base_url: "https://api.anthropic.com"
+        api_key: "replace-with-anthropic-compatible-key"
+        model: "replace-with-lower-medium-model"
+      upper_medium:
+        base_url: "https://api.anthropic.com"
+        api_key: "replace-with-anthropic-compatible-key"
+        model: "replace-with-upper-medium-model"
+      hard:
+        base_url: "https://api.anthropic.com"
+        api_key: "replace-with-anthropic-compatible-key"
+        model: "replace-with-hard-model"
+

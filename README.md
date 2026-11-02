@@ -158,6 +158,8 @@ The setup page asks for:
 
 The API key is stored in the SMR configuration file with user-only permissions. The full key is shown only once on `llm.acmeai.vn`; SMR cannot recover it later.
 
+The setup token is written to the data directory (`ui-token`) and is valid only for this process. Logs and host-config backups live in the same directory. On Windows and macOS the directory is under the per-user Application/Local data folder; on Linux it follows `XDG_DATA_HOME` and defaults to `~/.local/share/acmeai/smr`.
+
 Useful commands:
 
     smr version
@@ -208,9 +210,11 @@ Default locations:
 |---|---|
 | Windows | `%LOCALAPPDATA%\AcmeAI\SMR\config.yaml` |
 | macOS | `~/Library/Application Support/AcmeAI/SMR/config.yaml` |
-| Linux | `~/.config/acmeai/smr/config.yaml` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/acmeai/smr/config.yaml` |
 
-Minimal example:
+`ui-token`, `smr.log` and `backups/` sit beside the config file. The port and token paths can be overridden with `SMR_CONFIG` and `SMR_DATA_DIR`.
+
+A complete, commented example is in `config.example.yaml`. Minimal shape:
 
     listen: "127.0.0.1:8787"
     ui_listen: "127.0.0.1:8788"
@@ -247,10 +251,12 @@ Minimal example:
 Configuration rules:
 
 - SMR binds only to loopback. It refuses to start on a public interface.
-- Config files are readable only by the current user.
+- Config files are readable only by the current user. On Windows SMR resets the ACL with `icacls` and grants the current user because `chmod` does not change Windows ACLs.
 - `ACMEAI_API_KEY` overrides `classifier.api_key`.
 - `max_chars` must not exceed the server limit returned by `GET /v1/account`.
 - `count_tokens` is served by the Claude `easy` tier and does not call the classifier.
+
+Each response includes `X-SMR-Tier`, `X-SMR-Cache`, `X-SMR-Charged-VND`, `X-SMR-Balance-VND` and `X-SMR-Classifier` so a client can verify what happened without exposing prompts.
 
 ## Billing behavior
 
@@ -287,7 +293,7 @@ Common cases:
 - **Claude Code returns 401:** the Claude profile needs an Anthropic-compatible API key/token. Claude Pro OAuth is not supported.
 - **Codex cannot find the provider:** restart Codex after `smr setup` confirms the change.
 - **402 from SMR:** top up at `https://llm.acmeai.vn/topup`. SMR will not call a model without balance.
-- **Port already in use:** change `listen` and `ui_listen`, then run `smr restart`.
+- **Port already in use:** change `listen` and `ui_listen`, save, then preview and re-apply the host config so its base URL matches the new port. Run `smr restart` afterwards.
 - **Installer cannot find a release:** check that a tag and its release assets exist on GitHub Releases, then retry without `--version`.
 - **Installer checksum mismatch:** do not run the archive. Delete it and download again; report the release tag and asset name privately.
 - **macOS Gatekeeper blocks the binary:** phase 1 releases are not signed or notarized. Verify the checksum and follow the published install instructions. Signing is out of scope for phase 1.
@@ -306,6 +312,7 @@ This removes the background service and restores host configuration from the lat
 - API keys and provider credentials stay on the local machine.
 - SMR never logs raw prompts, API keys, or OAuth tokens.
 - The local UI binds only to loopback and requires a one-time token.
+- On Windows, SMR configuration and token files receive an explicit current-user-only ACL. On macOS and Linux they use `0600`/`0700` permissions.
 - Source code is available under Apache-2.0.
 
 ## Development

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/acmeai-vn/SMR/internal/fileperm"
 )
 
 // ConfigPath returns the default config path unless SMR_CONFIG overrides it.
@@ -59,7 +61,7 @@ func EnsureDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o700)
+	return fileperm.RestrictDir(path)
 }
 
 // HomePath resolves a path relative to the current user's home.

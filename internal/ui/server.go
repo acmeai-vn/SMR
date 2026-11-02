@@ -20,6 +20,7 @@ import (
 
 	"github.com/acmeai-vn/SMR/internal/classifier"
 	"github.com/acmeai-vn/SMR/internal/config"
+	"github.com/acmeai-vn/SMR/internal/fileperm"
 	"github.com/acmeai-vn/SMR/internal/hostcfg"
 	"github.com/acmeai-vn/SMR/internal/logtail"
 	"github.com/acmeai-vn/SMR/internal/proxy"
@@ -292,7 +293,8 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := strings.TrimSpace(r.PostFormValue("host"))
-	change, err := hostcfg.Preview(host, s.dataDir)
+	cfg := s.manager.Snapshot()
+	change, err := hostcfg.PreviewFor(host, s.dataDir, cfg.Listen)
 	data := s.baseData()
 	if err != nil {
 		data.Error = "Không tạo được diff: " + err.Error()
@@ -309,7 +311,8 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	host := strings.TrimSpace(r.PostFormValue("host"))
 	change := hostcfg.Change{Host: host, ExpectedHash: strings.TrimSpace(r.PostFormValue("expected"))}
-	if err := hostcfg.Apply(change, s.dataDir); err != nil {
+	cfg := s.manager.Snapshot()
+	if err := hostcfg.ApplyFor(change, s.dataDir, cfg.Listen); err != nil {
 		data := s.baseData()
 		data.Error = "Không ghi được cấu hình host: " + err.Error()
 		s.render(w, http.StatusConflict, "page", data)
@@ -409,6 +412,9 @@ func WriteTokenFile(dataDir, token string) (string, error) {
 	}
 	path := filepath.Join(dataDir, tokenFile)
 	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	if err := fileperm.Restrict(path); err != nil {
 		return "", err
 	}
 	return path, nil

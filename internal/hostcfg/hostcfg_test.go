@@ -69,6 +69,17 @@ func TestCodexUpdatesManagedBlock(t *testing.T) {
 	}
 }
 
+func TestPreviewForUsesConfiguredListener(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	change, err := PreviewFor(Codex, t.TempDir(), "127.0.0.1:18787")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(change.After, `base_url = "http://127.0.0.1:18787/v1"`) {
+		t.Fatalf("custom listener missing from proposed config:\n%s", change.After)
+	}
+}
+
 func TestClaudePreviewPreservesOtherSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))

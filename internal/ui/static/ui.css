@@ -9,11 +9,12 @@
   --accent-ink: #fff;
   --ok: #276749;
   --error: #9b2c2c;
+  --warn: #8a5a00;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font: "Be Vietnam Pro", ui-sans-serif, system-ui, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#111714; --paper:#18211d; --ink:#edf4f0; --muted:#9baaa3; --line:#2c3a34; --accent:#8bcbb9; --accent-ink:#102019; --ok:#8ad9b5; --error:#ff9b9b; }
+  :root { --bg:#111714; --paper:#18211d; --ink:#edf4f0; --muted:#9baaa3; --line:#2c3a34; --accent:#8bcbb9; --accent-ink:#102019; --ok:#8ad9b5; --error:#ff9b9b; --warn:#f0c674; }
 }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 var(--font); }
@@ -34,6 +35,7 @@ p { margin:0 0 8px; }
 .notice { border-radius:4px; padding:11px 14px; margin-bottom:14px; border:1px solid; }
 .notice.ok, .test-result.ok { color:var(--ok); border-color:color-mix(in srgb, var(--ok) 35%, var(--line)); background:color-mix(in srgb, var(--ok) 8%, var(--paper)); }
 .notice.error, .test-result.error { color:var(--error); border-color:color-mix(in srgb, var(--error) 35%, var(--line)); background:color-mix(in srgb, var(--error) 8%, var(--paper)); }
+.notice.warn { color:var(--warn); border-color:color-mix(in srgb, var(--warn) 35%, var(--line)); background:color-mix(in srgb, var(--warn) 8%, var(--paper)); }
 .test-result { margin-top:12px; padding:10px 12px; border:1px solid var(--line); border-radius:4px; font-size:13px; }
 .form-grid, .inline-form { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
 .form-grid label { flex:1 1 220px; }

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/acmeai-vn/SMR/internal/fileperm"
 )
 
 const (
@@ -22,6 +24,7 @@ const (
 	codexMarkerStart  = "# >>> SMR managed block"
 	codexMarkerEnd    = "# <<< SMR managed block"
 	claudePlaceholder = "smr-local-placeholder"
+	defaultListen     = "127.0.0.1:8787"
 )
 
 type Detection struct {
@@ -181,13 +184,25 @@ func DetectClaude() (Detection, error) {
 	if detection.BaseURL == "" {
 		detection.Notes = append(detection.Notes, "Không tìm thấy ANTHROPIC_BASE_URL trong Claude Code settings.")
 	}
+	detection.Notes = append(detection.Notes,
+		"Claude Code cần Anthropic API key/token tương thích. Claude Pro OAuth không được hỗ trợ.")
 	return detection, nil
 }
 
 func Preview(host, dataDir string) (Change, error) {
+	return PreviewFor(host, dataDir, defaultListen)
+}
+
+// PreviewFor builds the proposed host config for the actual SMR listener. The
+// setup UI must use this form when the user changes listen or ui_listen.
+func PreviewFor(host, dataDir, listen string) (Change, error) {
 	path, err := HostPath(host)
 	if err != nil {
 		return Change{}, err
+	}
+	listen = strings.TrimSpace(listen)
+	if listen == "" {
+		listen = defaultListen
 	}
 	beforeBytes, readErr := os.ReadFile(path)
 	existed := readErr == nil
@@ -195,7 +210,7 @@ func Preview(host, dataDir string) (Change, error) {
 		return Change{}, readErr
 	}
 	before := string(beforeBytes)
-	after, err := desired(host, before, existed)
+	after, err := desired(host, before, existed, "http://"+listen)
 	if err != nil {
 		return Change{}, err
 	}
@@ -213,7 +228,12 @@ func Preview(host, dataDir string) (Change, error) {
 }
 
 func Apply(change Change, dataDir string) error {
-	current, err := Preview(change.Host, dataDir)
+	return ApplyFor(change, dataDir, defaultListen)
+}
+
+// ApplyFor applies a preview produced for the current SMR listener.
+func ApplyFor(change Change, dataDir, listen string) error {
+	current, err := PreviewFor(change.Host, dataDir, listen)
 	if err != nil {
 		return err
 	}
@@ -226,18 +246,18 @@ func Apply(change Change, dataDir string) error {
 	return writeFileAtomic(current.Path, []byte(current.After))
 }
 
-func desired(host, before string, existed bool) (string, error) {
+func desired(host, before string, existed bool, baseURL string) (string, error) {
 	switch host {
 	case Codex:
-		return desiredCodex(before, existed)
+		return desiredCodex(before, existed, baseURL)
 	case Claude:
-		return desiredClaude(before, existed)
+		return desiredClaude(before, existed, baseURL)
 	default:
 		return "", fmt.Errorf("unknown host %q", host)
 	}
 }
 
-func desiredCodex(before string, existed bool) (string, error) {
+func desiredCodex(before string, existed bool, baseURL string) (string, error) {
 	newline := "\n"
 	if strings.Contains(before, "\r\n") {
 		newline = "\r\n"
@@ -246,7 +266,7 @@ func desiredCodex(before string, existed bool) (string, error) {
 		codexMarkerStart,
 		"[model_providers.smr]",
 		`name = "Smart Model Router"`,
-		`base_url = "http://127.0.0.1:8787/v1"`,
+		`base_url = "` + baseURL + `/v1"`,
 		`wire_api = "responses"`,
 		codexMarkerEnd,
 	}, newline)
@@ -266,7 +286,7 @@ func desiredCodex(before string, existed bool) (string, error) {
 	return trimmed + newline + newline + block + newline, nil
 }
 
-func desiredClaude(before string, existed bool) (string, error) {
+func desiredClaude(before string, existed bool, baseURL string) (string, error) {
 	settings := make(map[string]any)
 	if existed && strings.TrimSpace(before) != "" {
 		if err := json.Unmarshal([]byte(before), &settings); err != nil {
@@ -279,7 +299,7 @@ func desiredClaude(before string, existed bool) (string, error) {
 			env[key] = value
 		}
 	}
-	env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8787"
+	env["ANTHROPIC_BASE_URL"] = baseURL
 	env["ANTHROPIC_AUTH_TOKEN"] = claudePlaceholder
 	settings["env"] = env
 	body, err := json.MarshalIndent(settings, "", "  ")
@@ -456,7 +476,7 @@ func writeFileAtomic(path string, body []byte) error {
 	if err := os.Rename(name, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	return fileperm.Restrict(path)
 }
 
 func stripComment(line string) string {

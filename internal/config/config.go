@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/acmeai-vn/SMR/internal/fileperm"
 )
 
 var Tiers = []string{"easy", "lower_medium", "upper_medium", "hard"}
@@ -290,7 +292,7 @@ func Save(path string, cfg Config) error {
 	if err := os.Rename(tempName, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	return fileperm.Restrict(path)
 }
 
 // Manager serializes config reads and writes between the proxy and local UI.

@@ -13,7 +13,7 @@ This document is the source of truth for publishing SMR binaries, the release ma
 
 On the release machine or CI runner:
 
-- Go 1.23 or newer.
+- Go 1.24 or newer (the workflow reads the version from `go.mod`).
 - `tar`, `zip`, and `sha256sum` (or `shasum`).
 - GitHub CLI authenticated with permission to create releases.
 - A clean checkout at the tag commit.
@@ -87,6 +87,8 @@ Create a tag on the release commit and push it:
     git push origin v0.1.0
 
 The workflow in `.github/workflows/release.yml` runs tests, packages all assets, and creates the GitHub Release. It requires the repository secret or built-in `GITHUB_TOKEN` with `contents: write`.
+
+Pull requests and pushes to `main` also run `.github/workflows/ci.yml`, which checks formatting, vet, tests, and the `smr` build.
 
 If creating the release manually:
 
