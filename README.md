@@ -29,7 +29,7 @@ Provider API keys stay on your machine. SMR does not proxy model traffic through
 
 The tier-to-model mapping is yours. SMR ships no model list and never changes that mapping for you.
 
-- **Four tiers, not five.** The scale is fixed so the decision stays comparable from one request to the next.
+- **Four tiers, fixed.** The scale never changes, so a decision stays comparable from one request to the next.
 - **Separate native profiles** for Codex Responses and Claude Messages. No format translation between OpenAI and Anthropic.
 - **No local Jev key.** SMR calls the classifier with your ACME AI API key, and that key only pays for the classification decision.
 - **Server-side cache.** An identical state inside the cache window costs 10% of the first classification charge, with a 1 VND minimum.
@@ -37,16 +37,16 @@ The tier-to-model mapping is yours. SMR ships no model list and never changes th
 
 ## Why use it
 
-| | |
-|---|---|
-| **Spend less on tokens** | Easy work stops buying a frontier model. You pay four possible prices instead of one, and the price of each tier is your own choice of model. |
-| **Keep your stack** | Your provider accounts, your keys, your model names. No translation layer between OpenAI and Anthropic, so streaming, tool calls, and reasoning blocks stay native. |
-| **See every decision** | Tier, cache state, charge, and balance arrive as response headers and on the dashboard ledger. A routing decision is visible, not implied. |
-| **Keep prompts on your machine** | Only the last user message goes to the classifier. Provider keys and request bodies never reach ACME AI, and model traffic never passes through it. |
-| **One key, two hosts** | A single ACME AI key and one local config serve Codex and Claude Code, with an independent model mapping for each. |
-| **No lock-in on your editor** | SMR is a local HTTP endpoint. Any host that accepts a custom base URL and an API key can use it, and removing it is one config edit. |
+- **Spend less on tokens.** Easy work stops buying a frontier model. You pay four possible prices instead of one, and the price of each tier is your own choice of model.
+- **Keep your stack.** Your provider accounts, your keys, your model names. No translation layer between OpenAI and Anthropic, so streaming, tool calls, and reasoning blocks stay native.
+- **See every decision.** Tier, cache state, charge, and balance arrive as response headers and on the dashboard ledger. A routing decision is visible, not implied.
+- **Keep prompts on your machine.** Only the last user message goes to the classifier. Provider keys and request bodies never reach ACME AI, and model traffic never passes through it.
+- **One key, two hosts.** A single ACME AI key and one local config serve Codex and Claude Code, with an independent model mapping for each.
+- **No lock-in on your editor.** SMR is a local HTTP endpoint. Any host that accepts a custom base URL and an API key can use it, and removing it is one config edit.
 
 An illustrative day: your easy-tier model costs a tenth of your hard-tier model, and 60% of requests are actually easy. Provider spend drops from 100 units to 46 — about 54% less — with the same agent, the same prompts, and the same provider accounts. SMR does not pick your models; the saving comes from your mapping and your traffic mix.
+
+How you pay: ACME AI charges each classification against your prepaid VND balance (a cache hit costs 10% of the first charge, with a 1 VND minimum). Your model tokens are billed by your own provider, directly to your own account. SMR never touches model billing.
 
 ## Requirements
 

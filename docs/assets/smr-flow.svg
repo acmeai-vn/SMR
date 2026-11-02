@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" width="480" height="260" role="img" aria-labelledby="flowTitle flowDesc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240" width="480" height="240" role="img" aria-labelledby="flowTitle flowDesc">
   <title id="flowTitle">Smart Model Router routes one coding request into one of four difficulty tiers</title>
   <desc id="flowDesc">The coding agent sends one representative state to SMR. SMR asks the ACME AI classifier for a tier: easy, lower medium, upper medium or hard. SMR then forwards the original request, unchanged, to the model you configured for that tier: a cheap model, a balanced model, a strong model or the strongest model.</desc>
 
@@ -36,8 +36,8 @@
     </style>
   </defs>
 
-  <rect class="paper" x="0" y="0" width="480" height="260" rx="8"/>
-  <rect class="frame" x="0.5" y="0.5" width="479" height="259" rx="8"/>
+  <rect class="paper" x="0" y="0" width="480" height="240" rx="8"/>
+  <rect class="frame" x="0.5" y="0.5" width="479" height="239" rx="8"/>
 
   <text class="eyebrow" x="18" y="22">CODING AGENT</text>
   <text class="eyebrow" x="462" y="22" text-anchor="end">4 TIERS → MODEL</text>
@@ -108,7 +108,7 @@
   <!-- tiers -->
   <g>
     <rect class="tile" x="312" y="23" width="150" height="42" rx="4"/>
-    <rect x="313" y="24" width="148" height="40" rx="3.5" fill="#EEF5F1"/>
+    <rect x="313" y="24" width="148" height="40" rx="3.5" fill="#F2F7F4"/>
     <rect x="312" y="23" width="150" height="42" rx="4" fill="none" stroke="#A9C4B6" stroke-width="1.15"/>
     <circle class="easy-fill" cx="326" cy="44" r="4"/>
     <text class="tier-name" x="338" y="41">Easy</text>
@@ -116,7 +116,7 @@
   </g>
   <g>
     <rect class="tile" x="312" y="71" width="150" height="42" rx="4"/>
-    <rect x="313" y="72" width="148" height="40" rx="3.5" fill="#E9F2ED"/>
+    <rect x="313" y="72" width="148" height="40" rx="3.5" fill="#E7F1EB"/>
     <rect x="312" y="71" width="150" height="42" rx="4" fill="none" stroke="#79A191" stroke-width="1.15"/>
     <circle class="lower-fill" cx="326" cy="92" r="4"/>
     <text class="tier-name" x="338" y="89">Lower medium</text>
@@ -124,7 +124,7 @@
   </g>
   <g>
     <rect class="tile" x="312" y="119" width="150" height="42" rx="4"/>
-    <rect x="313" y="120" width="148" height="40" rx="3.5" fill="#E3EDE7"/>
+    <rect x="313" y="120" width="148" height="40" rx="3.5" fill="#DBEBE3"/>
     <rect x="312" y="119" width="150" height="42" rx="4" fill="none" stroke="#3F7466" stroke-width="1.15"/>
     <circle class="upper-fill" cx="326" cy="140" r="4"/>
     <text class="tier-name" x="338" y="137">Upper medium</text>
@@ -132,12 +132,12 @@
   </g>
   <g>
     <rect class="tile" x="312" y="167" width="150" height="42" rx="4"/>
-    <rect x="313" y="168" width="148" height="40" rx="3.5" fill="#DDE8E2"/>
+    <rect x="313" y="168" width="148" height="40" rx="3.5" fill="#D1E4DA"/>
     <rect x="312" y="167" width="150" height="42" rx="4" fill="none" stroke="#1C4A40" stroke-width="1.15"/>
     <circle class="hard-fill" cx="326" cy="188" r="4"/>
     <text class="tier-name" x="338" y="185">Hard</text>
     <text class="tier-model" x="338" y="200">strongest model</text>
   </g>
 
-  <text class="eyebrow" x="18" y="246">ONE REPRESENTATIVE STATE · ORIGINAL REQUEST FORWARDED UNCHANGED</text>
+  <text class="eyebrow" x="18" y="228">ONE REPRESENTATIVE STATE · ORIGINAL REQUEST FORWARDED UNCHANGED</text>
 </svg>
