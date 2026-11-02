@@ -54,7 +54,7 @@
   </div>
 
   {{if .Config.Classifier.APIKey}}
-  <p class="hint key-hint">{{t .Lang "step1.rotate"}} <a class="inline-link" href="{{.DashboardURL}}/keys" target="_blank" rel="noopener noreferrer">{{.EnvironmentLabel}} dashboard ↗</a></p>
+  <p class="hint key-hint">{{t .Lang "step1.rotate"}} <a class="inline-link" href="{{.DashboardURL}}/keys" target="_blank" rel="noopener noreferrer">{{if .EnvironmentLabel}}{{.EnvironmentLabel}} {{end}}dashboard ↗</a></p>
   {{else}}
   <div class="callout">
     <div class="callout-text">
@@ -67,7 +67,7 @@
       <p class="hint">{{t .Lang "step1.callout.note"}}</p>
     </div>
     <div class="callout-action">
-      <a class="btn primary" href="{{.DashboardURL}}" target="_blank" rel="noopener noreferrer">{{t .Lang "step1.callout.cta"}}<span class="pill-env">{{.EnvironmentLabel}}</span>↗</a>
+      <a class="btn primary" href="{{.DashboardURL}}" target="_blank" rel="noopener noreferrer">{{t .Lang "step1.callout.cta"}}{{if .EnvironmentLabel}}<span class="pill-env">{{.EnvironmentLabel}}</span>{{end}}↗</a>
       <span class="mono small">{{.DashboardURL}}</span>
     </div>
   </div>

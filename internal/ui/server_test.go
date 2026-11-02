@@ -127,6 +127,9 @@ func TestDashboardLinkFollowsEnvironment(t *testing.T) {
 	if _, label := dashboardFor("https://api-testing.acmeai.vn"); label != "Testing" {
 		t.Fatalf("testing label=%q", label)
 	}
+	if _, label := dashboardFor("https://api.acmeai.vn"); label != "" {
+		t.Fatalf("production must carry no environment label, got %q", label)
+	}
 }
 
 func TestPageLinksToDashboardWithoutKey(t *testing.T) {
@@ -142,6 +145,28 @@ func TestPageLinksToDashboardWithoutKey(t *testing.T) {
 	}
 	if !strings.Contains(body, "Nạp tiền") || !strings.Contains(body, "Tạo API key") {
 		t.Fatalf("signup steps missing")
+	}
+	if strings.Contains(body, "pill-env") {
+		t.Fatalf("production page must not show an environment badge:\n%s", body)
+	}
+}
+
+func TestTestingPageLabelsDashboard(t *testing.T) {
+	_, manager, server, client, _ := testUI(t)
+	authenticate(t, client, server.URL)
+
+	cfg := manager.Snapshot()
+	cfg.Classifier.BaseURL = "https://api-testing.acmeai.vn"
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getBody(t, client, server.URL+"/")
+	if !strings.Contains(body, `href="https://llm-testing.acmeai.vn"`) {
+		t.Fatalf("missing testing dashboard link:\n%s", body)
+	}
+	if !strings.Contains(body, `class="pill-env">Testing</span>`) {
+		t.Fatalf("missing Testing badge:\n%s", body)
 	}
 }
 

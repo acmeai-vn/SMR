@@ -377,7 +377,9 @@ func dashboardFor(baseURL string) (string, string) {
 	if strings.Contains(host, "testing") || strings.Contains(host, "test") {
 		return "https://llm-testing.acmeai.vn", "Testing"
 	}
-	return "https://llm.acmeai.vn", "Production"
+	// Production needs no suffix: the badge would only add noise on the
+	// default environment.
+	return "https://llm.acmeai.vn", ""
 }
 
 // hostUsesSMR reports whether a host already points at this SMR instance.
