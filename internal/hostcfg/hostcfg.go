@@ -221,16 +221,13 @@ func InstructionsFor(host, listen string) (Instructions, error) {
 			},
 		}
 	case Claude:
-		body, err := json.MarshalIndent(map[string]any{
-			"env": map[string]any{
-				"ANTHROPIC_BASE_URL":   base,
-				"ANTHROPIC_AUTH_TOKEN": claudePlaceholder,
-			},
-		}, "", "  ")
-		if err != nil {
-			return Instructions{}, err
-		}
-		result.Parts = []Part{{TitleKey: "step3.claude.block", Code: string(body)}}
+		// Only the two entries, not a whole document: settings.json usually
+		// already has other settings, and pasting a complete {"env": {...}}
+		// over it would delete them.
+		result.Parts = []Part{{TitleKey: "step3.claude.block", Code: strings.Join([]string{
+			`"ANTHROPIC_BASE_URL": "` + base + `",`,
+			`"ANTHROPIC_AUTH_TOKEN": "` + claudePlaceholder + `"`,
+		}, "\n")}}
 	default:
 		return Instructions{}, fmt.Errorf("unknown host %q", host)
 	}

@@ -347,7 +347,13 @@ func (s *Server) baseData(lang string) pageData {
 			Label:     profileLabel(detection.Host),
 			UsesSMR:   hostUsesSMR(detection, cfg.Listen),
 		}
-		if instructions, err := hostcfg.InstructionsFor(detection.Host, cfg.Listen); err == nil {
+		instructions, err := hostcfg.InstructionsFor(detection.Host, cfg.Listen)
+		if err != nil {
+			// Leaving step 3 empty looks like SMR has nothing to add; say why.
+			if data.Error == "" {
+				data.Error = trf(lang, "error.host_instructions", detection.Host, err.Error())
+			}
+		} else {
 			view.Parts = instructions.Parts
 		}
 		data.Detections = append(data.Detections, view)
@@ -550,66 +556,76 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		key = cfg.Classifier.APIKey
 	}
-	data := s.baseData(lang)
-	data.activateTab(r.PostFormValue("smr_tab"))
-	// Echo the submitted settings instead of the saved ones. Otherwise a failed
-	// check silently reverts the form to the previous environment.
-	data.Config.Classifier.BaseURL = baseURL
+	tab := r.PostFormValue("smr_tab")
 	maxChars := cfg.Classifier.MaxChars
 	if maximum, ok := parseInt(r.PostFormValue("max_chars")); ok && maximum > 0 {
 		maxChars = int(maximum)
-		data.Config.Classifier.MaxChars = maxChars
 	}
 	fallback := cfg.Classifier.FallbackTier
 	if tier := strings.TrimSpace(r.PostFormValue("fallback_tier")); config.IsTier(tier) {
 		fallback = tier
-		data.Config.Classifier.FallbackTier = fallback
 	}
 	overrideKey, overrideBaseURL := config.EnvOverrides()
-	if key == "" {
-		data.Test = &testResult{Error: tr(lang, "error.no_key")}
+	// A failed check echoes what the user typed. The saved config still holds
+	// the previous environment, so rendering it unchanged would silently reset
+	// the form and make a temporary error look like a change of mind.
+	fail := func(result *testResult) {
+		data := s.baseData(lang)
+		data.activateTab(tab)
+		data.Config.Classifier.BaseURL = baseURL
+		data.Config.Classifier.MaxChars = maxChars
+		data.Config.Classifier.FallbackTier = fallback
+		data.Test = result
 		s.render(w, http.StatusOK, "page", data)
+	}
+	if key == "" {
+		fail(&testResult{Error: tr(lang, "error.no_key")})
 		return
 	}
 	client := classifier.New(baseURL, key, 15*time.Second, 0)
 	account, err := client.Account(r.Context())
 	if err != nil {
-		data.Test = &testResult{Error: publicClassifierError(lang, err), EnvOverride: overrideKey || overrideBaseURL}
-	} else {
-		// Anything that just answered with a balance is known-good, so keep it
-		// instead of making the user paste the secret or the URL again.
-		saved := false
-		if formKey != "" && formKey != cfg.Classifier.APIKey {
-			cfg.Classifier.APIKey = key
-			saved = true
+		fail(&testResult{Error: publicClassifierError(lang, err), EnvOverride: overrideKey || overrideBaseURL})
+		return
+	}
+	// Anything that just answered with a balance is known-good, so keep it
+	// instead of making the user paste the secret or the URL again.
+	saved := false
+	if formKey != "" && formKey != cfg.Classifier.APIKey {
+		cfg.Classifier.APIKey = key
+		saved = true
+	}
+	if baseURL != cfg.Classifier.BaseURL {
+		cfg.Classifier.BaseURL = baseURL
+		saved = true
+	}
+	if maxChars != cfg.Classifier.MaxChars {
+		cfg.Classifier.MaxChars = maxChars
+		saved = true
+	}
+	if fallback != cfg.Classifier.FallbackTier {
+		cfg.Classifier.FallbackTier = fallback
+		saved = true
+	}
+	if saved {
+		if updateErr := s.manager.Update(cfg); updateErr != nil {
+			fail(&testResult{Error: trf(lang, "error.test_save", updateErr.Error())})
+			return
 		}
-		if baseURL != cfg.Classifier.BaseURL {
-			cfg.Classifier.BaseURL = baseURL
-			saved = true
-		}
-		if maxChars != cfg.Classifier.MaxChars {
-			cfg.Classifier.MaxChars = maxChars
-			saved = true
-		}
-		if fallback != cfg.Classifier.FallbackTier {
-			cfg.Classifier.FallbackTier = fallback
-			saved = true
-		}
-		if saved {
-			if updateErr := s.manager.Update(cfg); updateErr != nil {
-				data.Test = &testResult{Error: trf(lang, "error.test_save", updateErr.Error())}
-				s.render(w, http.StatusOK, "page", data)
-				return
-			}
-		}
-		data.Test = &testResult{
-			OK:              true,
-			BalanceVND:      account.BalanceVND,
-			MaxStateChars:   account.MaxStateChars,
-			CacheTTLSeconds: account.CacheTTLSeconds,
-			Saved:           saved,
-			EnvOverride:     overrideKey || overrideBaseURL,
-		}
+	}
+	// Build the page after the save. The key pill, the onboarding callout and
+	// the dashboard link all come from the config, so a snapshot taken before
+	// Update would say "saved" while still showing "no key" and the previous
+	// environment's dashboard.
+	data := s.baseData(lang)
+	data.activateTab(tab)
+	data.Test = &testResult{
+		OK:              true,
+		BalanceVND:      account.BalanceVND,
+		MaxStateChars:   account.MaxStateChars,
+		CacheTTLSeconds: account.CacheTTLSeconds,
+		Saved:           saved,
+		EnvOverride:     overrideKey || overrideBaseURL,
 	}
 	s.render(w, http.StatusOK, "page", data)
 }

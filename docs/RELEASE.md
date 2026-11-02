@@ -107,7 +107,8 @@ Upload all files in one operation. Do not edit an asset after publication; publi
 4. Run the same flow with a deliberately bad checksum; it must stop before writing a binary.
 5. Test the Windows installer with `-NoService -NoSetup -NoPath` in a disposable Windows VM.
 6. Test install, upgrade, rollback, and `smr uninstall` on Windows 11, macOS 14/15, and Ubuntu 22.04/24.04.
-7. Confirm `smr serve` is the command used by the Linux unit, macOS LaunchAgent, and Windows scheduled task.
+7. Confirm `smr serve` is the command used by the Linux unit and macOS LaunchAgent, and
+   `smr serve --background` by the Windows scheduled task and Startup shortcut.
 
 ## Validate marketplace packages
 

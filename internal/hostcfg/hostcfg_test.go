@@ -78,6 +78,11 @@ func TestClaudeInstructionsUseEnvFragment(t *testing.T) {
 		!strings.Contains(code, `"ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"`) {
 		t.Fatalf("env fragment=%s", code)
 	}
+	// A whole {"env": {...}} document would replace unrelated settings when
+	// pasted over an existing file.
+	if strings.Contains(code, `"env"`) || strings.HasPrefix(strings.TrimSpace(code), "{") {
+		t.Fatalf("fragment must be the two entries only:\n%s", code)
+	}
 }
 
 func TestInstructionsDoNotWriteHostFiles(t *testing.T) {

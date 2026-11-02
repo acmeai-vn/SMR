@@ -562,6 +562,60 @@ func TestTestConnectionEchoesSubmittedValuesOnFailure(t *testing.T) {
 	}
 }
 
+// The page is built from a snapshot taken before the save, so a successful
+// check said "saved" while still showing "no key" and the previous
+// environment's dashboard link. The render must happen after Update.
+func TestTestConnectionPageReflectsTheSavedKey(t *testing.T) {
+	classifier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/account" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"balance_vnd":42000,"max_state_chars":12000,"cache_ttl_seconds":300}`)
+	}))
+	defer classifier.Close()
+
+	server, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	// Start on testing so the dashboard link has to move with the new URL.
+	cfg := manager.Snapshot()
+	cfg.Classifier.BaseURL = "https://api-testing.acmeai.vn"
+	cfg.Classifier.APIKey = ""
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.PostForm(httpServer.URL+"/test", url.Values{
+		"csrf":                {server.csrf},
+		"classifier_base_url": {classifier.URL},
+		"classifier_api_key":  {"acme_sk_new"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "Đã có key") {
+		t.Fatalf("saved key still renders as missing:\n%s", body)
+	}
+	if strings.Contains(body, "Chưa có key? Tạo tài khoản") {
+		t.Fatalf("onboarding callout still shows after the key was saved:\n%s", body)
+	}
+	// The local test server maps to the production dashboard, so the link must
+	// no longer point at testing even though that was the saved environment.
+	if !strings.Contains(body, "https://llm.acmeai.vn") {
+		t.Fatalf("dashboard link did not follow the tested base URL:\n%s", body)
+	}
+	if strings.Contains(body, "https://llm-testing.acmeai.vn") {
+		t.Fatalf("page still shows the previous environment's dashboard:\n%s", body)
+	}
+}
+
 // Example: ACMEAI_BASE_URL is set. The file must still keep what the user
 // typed, the daemon must keep using the variable, and the page must say so.
 func TestEnvOverrideKeepsFileAndSaysSo(t *testing.T) {

@@ -55,7 +55,7 @@ func main() {
 	case "logs":
 		err = runLogs(os.Args[2:])
 	case "restart":
-		err = service.Restart(ctx)
+		err = restartDaemon(ctx)
 	case "update":
 		err = runUpdate(ctx, os.Args[2:])
 	case "uninstall":
@@ -203,13 +203,14 @@ func runSetup(ctx context.Context) error {
 	}
 	if _, err := service.HealthCheck(ctx, "http://"+cfg.Listen); err != nil {
 		// The daemon may have been stopped by a reboot, a crash or an update.
-		// Starting it here keeps `smr setup` a single command for the user.
-		fmt.Println("SMR is not running; starting it in the background...")
-		if err := service.StartBackground(); err != nil {
-			return fmt.Errorf("start SMR: %w", err)
-		}
-		if err := waitForHealth(ctx, "http://"+cfg.Listen, 20*time.Second); err != nil {
-			return fmt.Errorf("SMR did not become ready: %w", err)
+		// Restart through the service manager instead of starting a detached
+		// process: a detached daemon holds the pid lock, so a later
+		// `systemctl restart` would spawn a process that exits immediately
+		// while the manager still reports success. Restart already falls back
+		// to a detached start when no unit is installed.
+		fmt.Println("SMR is not running; starting it...")
+		if err := restartDaemon(ctx); err != nil {
+			return err
 		}
 	}
 	token, err := ui.ReadTokenFile(dataDir)
@@ -220,6 +221,24 @@ func runSetup(ctx context.Context) error {
 	fmt.Println("Opening SMR setup:", target)
 	if err := service.OpenBrowser(ctx, target); err != nil {
 		fmt.Println("Open this URL manually:", target)
+	}
+	return nil
+}
+
+// restartDaemon restarts the service manager entry (or a detached daemon) and
+// waits for /health. systemctl, launchctl and schtasks report success as soon
+// as the process is spawned, so without this check a daemon that exits on a
+// busy port or a held lock looks like a successful restart.
+func restartDaemon(ctx context.Context) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := service.Restart(ctx); err != nil {
+		return err
+	}
+	if err := waitForHealth(ctx, "http://"+cfg.Listen, 15*time.Second); err != nil {
+		return fmt.Errorf("SMR restarted but is not healthy at %s: %w", cfg.Listen, err)
 	}
 	return nil
 }
@@ -356,9 +375,10 @@ func runUpdate(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Println("installed", manifest.Version)
-	if err := service.Restart(ctx); err != nil {
-		fmt.Println("restart the installed service manually:", err)
+	if err := restartDaemon(ctx); err != nil {
+		return fmt.Errorf("installed %s but the daemon did not come back: %w", manifest.Version, err)
 	}
+	fmt.Println("SMR is healthy")
 	return nil
 }
 

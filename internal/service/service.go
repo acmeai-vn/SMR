@@ -68,6 +68,13 @@ func HealthCheck(ctx context.Context, baseURL string) (Health, error) {
 }
 
 func Restart(ctx context.Context) error {
+	// A daemon started outside the service manager holds the data directory, so
+	// the process the service manager spawns would exit with ErrAlreadyRunning
+	// while systemctl/launchctl still report success. Stop it first; the pid
+	// file also covers --no-service installs.
+	if err := StopDetached(); err != nil {
+		return err
+	}
 	switch runtime.GOOS {
 	case "windows":
 		if err := stopWindowsServe(ctx); err != nil {
@@ -225,18 +232,100 @@ func StopDetached() error {
 	if err != nil {
 		return err
 	}
-	pid, running := readLockOwner(filepath.Join(dataDir, daemonPIDFile))
-	if !running {
+	return stopDetachedAt(filepath.Join(dataDir, daemonPIDFile))
+}
+
+// stopDetachedAt stops the daemon recorded in path. It verifies the process
+// before signalling it: a pid file survives a crash or power loss, and the
+// recorded pid may have been reused by an unrelated program after a reboot.
+func stopDetachedAt(path string) error {
+	record := readPIDRecord(path)
+	if record.PID <= 0 {
 		return nil
 	}
-	process, err := os.FindProcess(pid)
+	if !processAlive(record.PID) {
+		// Remove the stale file so a reused pid cannot block the next start.
+		return removePIDFile(path, record.PID)
+	}
+	match, err := processMatchesDaemon(record)
+	if err != nil {
+		return fmt.Errorf("cannot verify pid %d before stopping it: %w", record.PID, err)
+	}
+	if !match {
+		// The pid was reused after a crash or reboot. Leave that process alone
+		// and drop the stale lock so the next start is not blocked by it.
+		return removePIDFile(path, record.PID)
+	}
+	process, err := os.FindProcess(record.PID)
 	if err != nil {
 		return err
 	}
 	if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
+	// Kill only sends the signal. Wait for the process to disappear so a
+	// following start does not race the still-held lock.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(record.PID) {
+			return removePIDFile(path, record.PID)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("SMR pid %d did not exit", record.PID)
+}
+
+// removePIDFile deletes path only when it still names pid.
+func removePIDFile(path string, pid int) error {
+	if current := readPIDRecord(path); current.PID != pid {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	return nil
+}
+
+// processMatchesDaemon reports whether the recorded pid still runs SMR: the
+// command line must end in `serve` / `serve --background` and, when both sides
+// are known, the executable must be the one that wrote the lock.
+func processMatchesDaemon(record pidRecord) (bool, error) {
+	cmdline, exe, err := processCommand(record.PID)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(cmdline) == "" {
+		if !processAlive(record.PID) {
+			return false, nil
+		}
+		// Windows returns no command line for a process owned by another user
+		// or one that is protected. Refuse rather than guess: clearing this
+		// lock could let a second daemon start while this one still serves.
+		return false, fmt.Errorf("cannot read the command line of pid %d; stop it manually if it is an SMR daemon", record.PID)
+	}
+	if !isServeCommand(cmdline) {
+		return false, nil
+	}
+	if record.Exe == "" || exe == "" {
+		// Older pid file or an unreadable image path: the command line is the
+		// strongest signal left, and it already names the daemon.
+		return true, nil
+	}
+	return sameExecutable(exe, record.Exe), nil
+}
+
+// sameExecutable compares paths, tolerating the " (deleted)" suffix Linux adds
+// to /proc/<pid>/exe after an update replaced the binary on disk.
+func sameExecutable(left, right string) bool {
+	trim := func(path string) string {
+		return strings.TrimSuffix(filepath.Clean(path), " (deleted)")
+	}
+	left, right = trim(left), trim(right)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		// Both filesystems are case-insensitive by default.
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 // StartBackground launches the daemon detached from the current terminal. The

@@ -85,8 +85,8 @@ var messages = map[string]message{
 		"Do not paste the model_provider line inside a table; TOML would read it as a key of that table. SMR never edits the file; you decide whether to make SMR the default.",
 	},
 	"step3.claude.block": {
-		"Gộp vào object env đang có trong settings.json (đừng thay cả file):",
-		"Merge into the existing env object in settings.json (do not replace the file):",
+		"Dán 2 dòng này vào object env trong settings.json. Thêm dấu phẩy sau dòng phía trên nếu cần; đừng thay cả file:",
+		"Paste these two lines into the env object in settings.json. Add a comma after the previous line if needed; do not replace the file:",
 	},
 	"step3.claude.note": {
 		"ANTHROPIC_AUTH_TOKEN ở đây chỉ là placeholder; SMR thay bằng key của profile Claude khi forward. Nếu file đang có ANTHROPIC_API_KEY thì giữ hoặc bỏ đều được, SMR không dùng giá trị đó. Khởi động lại Claude Code sau khi sửa.",
@@ -144,7 +144,11 @@ var messages = map[string]message{
 
 	"error.save":      {"Không lưu được cấu hình: %s", "Could not save the configuration: %s"},
 	"error.test_save": {"Key hợp lệ nhưng không lưu được: %s", "The key is valid but could not be saved: %s"},
-	"error.no_key":    {"Chưa có API key. Dán key vào ô API key rồi kiểm tra lại.", "No API key yet. Paste one into the API key field and check again."},
+	"error.host_instructions": {
+		"Không đọc được cấu hình %s để hiện phần cần dán: %s. Các bước còn lại vẫn dùng được.",
+		"Could not read the %s configuration to build the blocks: %s. The other steps still work.",
+	},
+	"error.no_key": {"Chưa có API key. Dán key vào ô API key rồi kiểm tra lại.", "No API key yet. Paste one into the API key field and check again."},
 	"error.invalid_key": {
 		"API key không hợp lệ hoặc đã bị thu hồi.",
 		"The API key is invalid or revoked.",

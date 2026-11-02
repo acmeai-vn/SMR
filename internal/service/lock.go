@@ -32,7 +32,7 @@ func AcquireLock(dataDir string) (*Lock, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			_, writeErr := fmt.Fprintf(file, "%d\n", os.Getpid())
+			writeErr := writePIDRecord(file)
 			closeErr := file.Close()
 			if writeErr != nil {
 				_ = os.Remove(path)
@@ -47,9 +47,20 @@ func AcquireLock(dataDir string) (*Lock, error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		pid, running := readLockOwner(path)
-		if running {
-			return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, pid)
+		record := readPIDRecord(path)
+		// A pid file that already names this process is our own lock: a single
+		// process must never take it twice, however its command line looks.
+		if record.PID == os.Getpid() {
+			return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, record.PID)
+		}
+		if record.PID > 0 && processAlive(record.PID) {
+			match, verifyErr := processMatchesDaemon(record)
+			// A verification failure keeps the lock: a false "not running"
+			// would let two daemons race for the ports. A definite mismatch is
+			// a stale pid reused after a reboot, so the file is replaced.
+			if verifyErr != nil || match {
+				return nil, fmt.Errorf("%w (pid %d)", ErrAlreadyRunning, record.PID)
+			}
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
@@ -71,15 +82,49 @@ func (l *Lock) Release() error {
 	return os.Remove(l.path)
 }
 
-// readLockOwner returns the pid stored in path and whether it is alive.
-func readLockOwner(path string) (int, bool) {
+// pidRecord is what the pid file stores. The executable path lets a later
+// restart confirm that a recorded pid still belongs to SMR: after a crash or a
+// reboot the same pid can be handed to an unrelated program.
+type pidRecord struct {
+	PID int
+	// Exe is empty for pid files written by builds before this field existed.
+	Exe string
+}
+
+// writePIDRecord stores the current process in an already-opened lock file.
+func writePIDRecord(file *os.File) error {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = ""
+	}
+	_, err = fmt.Fprintf(file, "%d\n%s\n", os.Getpid(), exe)
+	return err
+}
+
+// readPIDRecord parses the lock file. Only the first line is required so an
+// older pid file is still readable.
+func readPIDRecord(path string) pidRecord {
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return 0, false
+		return pidRecord{}
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	lines := strings.SplitN(string(body), "\n", 2)
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
 	if err != nil || pid <= 0 {
+		return pidRecord{}
+	}
+	record := pidRecord{PID: pid}
+	if len(lines) > 1 {
+		record.Exe = strings.TrimSpace(lines[1])
+	}
+	return record
+}
+
+// readLockOwner returns the pid stored in path and whether it is alive.
+func readLockOwner(path string) (int, bool) {
+	record := readPIDRecord(path)
+	if record.PID <= 0 {
 		return 0, false
 	}
-	return pid, processAlive(pid)
+	return record.PID, processAlive(record.PID)
 }

@@ -138,11 +138,11 @@ try {
     # A running daemon locks its own image. Stop it before the binary is
     # replaced, otherwise Windows leaves the path in a delete-pending state.
     # Match the daemon exactly: `smr serve` or `smr serve --background`.
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'smr%'" -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like 'smr*.exe' -and $_.CommandLine -match '\bserve(\s+--background)?\s*$' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        $running = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        $running = Get-CimInstance Win32_Process -Filter "Name LIKE 'smr%'" -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like 'smr*.exe' -and $_.CommandLine -match '\bserve(\s+--background)?\s*$' }
         if (-not $running) { break }
         Start-Sleep -Milliseconds 250

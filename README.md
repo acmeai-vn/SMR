@@ -99,7 +99,7 @@ Install without opening the setup page:
    - macOS: LaunchAgent `vn.acmeai.smr`.
    - Linux: `systemd --user` unit `smr.service`.
 7. Starts SMR on `127.0.0.1:8787` and its local UI on `127.0.0.1:8788`.
-8. Waits for `GET /health` before reporting success.
+8. Waits for `GET /health` before reporting success. `--no-service` skips the wait, because the binary is installed but not started.
 9. Opens `smr setup` with a one-time token unless `--no-setup` or `--no-service` is set.
 
 The installer never writes provider keys into logs and never sends them to ACME AI. Running it again upgrades the binary, stops the old daemon, and restarts the service without deleting your configuration.
@@ -225,15 +225,11 @@ line itself; you decide whether to make SMR the default.
 
 ### Claude Code
 
-Merge these entries into the existing `env` object in `settings.json`; do not
+Add these two entries to the existing `env` object in `settings.json`; do not
 replace the whole file:
 
-    {
-      "env": {
-        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
-        "ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"
-      }
-    }
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"
 
 The placeholder is not a secret. SMR replaces it with the Claude profile key
 when forwarding the request. Restart Claude Code after the edit.
@@ -263,7 +259,10 @@ Default locations:
 | macOS | `~/Library/Application Support/AcmeAI/SMR/config.yaml` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/acmeai/smr/config.yaml` |
 
-`ui-token`, `daemon.pid` and `smr.log` sit beside the config file. The port and data paths can be overridden with `SMR_CONFIG` and `SMR_DATA_DIR`.
+`ui-token`, `daemon.pid` and `smr.log` live in the data directory above, not
+necessarily beside the config file: `SMR_CONFIG` moves only the file. The
+config path and data directory can be overridden with `SMR_CONFIG` and
+`SMR_DATA_DIR`.
 
 A complete, commented example is in `config.example.yaml`. Minimal shape:
 
@@ -355,9 +354,10 @@ Common cases:
   which Defender classifies as persistence malware. Upgrade to v0.1.2 or later, remove the
   detection from protection history, and add the install folder with
   `Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\AcmeAI\SMR"` from an elevated PowerShell.
-- **Two SMR builds on one machine:** each build needs its own `listen`/`ui_listen` port and its own
-  config file. The installer always uses the per-user data directory; set `SMR_CONFIG` to run a
-  second build from a different file.
+- **Two SMR builds on one machine:** each build needs its own `listen`/`ui_listen` port, its own
+  config file and its own data directory, because `daemon.pid` and `ui-token` are per data
+  directory. Set both `SMR_CONFIG` and `SMR_DATA_DIR`; `SMR_CONFIG` alone still shares the lock,
+  so the second build's daemon exits with "another SMR daemon is already running".
 
 ## Uninstall
 

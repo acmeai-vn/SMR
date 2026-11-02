@@ -2,9 +2,12 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // The daemon runs as `smr serve --background`; matching only `serve$` made
@@ -32,23 +35,68 @@ func TestIsServeCommand(t *testing.T) {
 	}
 }
 
-// A second daemon must fail before it can bind a port or rewrite ui-token.
-func TestAcquireLockIsExclusive(t *testing.T) {
-	dataDir := t.TempDir()
-	lock, err := AcquireLock(dataDir)
+// TestHelperServe is a stand-in daemon: its command line ends in `serve`, like
+// the real one, so the lock can tell it apart from the test process itself.
+func TestHelperServe(t *testing.T) {
+	if os.Getenv("SMR_HELPER_SERVE") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+}
+
+// TestHelperIdle is a live process that is not a daemon.
+func TestHelperIdle(t *testing.T) {
+	if os.Getenv("SMR_HELPER_SERVE") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+}
+
+func startHelper(t *testing.T, run string, args ...string) *os.Process {
+	t.Helper()
+	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Release()
-
-	if _, err := AcquireLock(dataDir); !errors.Is(err, ErrAlreadyRunning) {
-		t.Fatalf("second AcquireLock error = %v, want ErrAlreadyRunning", err)
+	command := exec.Command(exe, append([]string{"-test.run=" + run}, args...)...)
+	command.Env = append(os.Environ(), "SMR_HELPER_SERVE=1")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, daemonPIDFile)); err != nil {
-		t.Fatalf("pid file missing: %v", err)
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	})
+	return command.Process
+}
+
+func startHelperServe(t *testing.T) *os.Process {
+	t.Helper()
+	return startHelper(t, "TestHelperServe", "serve")
+}
+
+func startHelperIdle(t *testing.T) *os.Process {
+	t.Helper()
+	return startHelper(t, "TestHelperIdle")
+}
+
+// A second daemon must fail before it can bind a port or rewrite ui-token.
+func TestAcquireLockIsExclusive(t *testing.T) {
+	dataDir := t.TempDir()
+	helper := startHelperServe(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePIDFile(t, dataDir, helper.Pid, exe)
+
+	_, err = AcquireLock(dataDir)
+	if !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("second AcquireLock error = %v, want ErrAlreadyRunning", err)
 	}
 }
 
+// A released lock is reusable by the same process.
 func TestAcquireLockReusesReleasedLock(t *testing.T) {
 	dataDir := t.TempDir()
 	lock, err := AcquireLock(dataDir)
@@ -95,5 +143,110 @@ func TestReleaseLeavesAnotherProcessLock(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("release removed a lock owned by another pid: %v", err)
+	}
+}
+
+func writePIDFile(t *testing.T, dataDir string, pid int, exe string) string {
+	t.Helper()
+	path := filepath.Join(dataDir, daemonPIDFile)
+	body := fmt.Sprintf("%d\n%s\n", pid, exe)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A pid file survives a crash or reboot, and the recorded pid may then belong
+// to an unrelated process. A dead pid must be cleared instead of blocking the
+// next start.
+func TestStopDetachedClearsDeadPID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("SMR_DATA_DIR", dataDir)
+	path := writePIDFile(t, dataDir, 2147483647, filepath.Join(dataDir, "smr.exe"))
+
+	if err := StopDetached(); err != nil {
+		t.Fatalf("StopDetached: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale pid file was left behind: %v", err)
+	}
+}
+
+// The test process is alive but its command line is not `smr serve`, so a
+// reboot that reused the pid must not get it killed; the stale lock is dropped
+// instead of blocking the next start.
+func TestStopDetachedLeavesReusedPIDAlive(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("SMR_DATA_DIR", dataDir)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writePIDFile(t, dataDir, os.Getpid(), exe)
+
+	if err := StopDetached(); err != nil {
+		t.Fatalf("StopDetached: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale pid file was not cleared: %v", err)
+	}
+}
+
+// Even a serve-like command at a different binary is not the recorded daemon.
+func TestStopDetachedIgnoresDifferentBinary(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("SMR_DATA_DIR", dataDir)
+	path := writePIDFile(t, dataDir, os.Getpid(), filepath.Join(dataDir, "somewhere-else", "smr.exe"))
+
+	if err := StopDetached(); err != nil {
+		t.Fatalf("StopDetached: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale pid file was not cleared: %v", err)
+	}
+}
+
+// A pid file left after a reboot must not lock the user out when the pid now
+// belongs to a different program.
+func TestAcquireLockReplacesReusedPID(t *testing.T) {
+	dataDir := t.TempDir()
+	helper := startHelperIdle(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writePIDFile(t, dataDir, helper.Pid, exe)
+
+	lock, err := AcquireLock(dataDir)
+	if err != nil {
+		t.Fatalf("reused pid blocked the lock: %v", err)
+	}
+	defer lock.Release()
+	record := readPIDRecord(path)
+	if record.PID != os.Getpid() {
+		t.Fatalf("lock still names pid %d", record.PID)
+	}
+}
+
+// The happy path: a verified daemon is stopped and its lock is cleared so the
+// next start is not blocked.
+func TestStopDetachedStopsRecordedDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("SMR_DATA_DIR", dataDir)
+	helper := startHelperServe(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writePIDFile(t, dataDir, helper.Pid, exe)
+
+	if err := StopDetached(); err != nil {
+		t.Fatalf("StopDetached: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pid file was not cleared: %v", err)
+	}
+	if processAlive(helper.Pid) {
+		t.Fatal("daemon is still running after StopDetached")
 	}
 }
