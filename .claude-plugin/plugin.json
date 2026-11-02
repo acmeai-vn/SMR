@@ -1,0 +1,19 @@
+{
+  "name": "smart-model-router",
+  "description": "Install and operate the SMR local routing daemon for Codex and Claude Code.",
+  "version": "0.1.0",
+  "author": {
+    "name": "ACME AI",
+    "email": "support@acmeai.vn"
+  },
+  "homepage": "https://github.com/acmeai-vn/SMR",
+  "repository": "https://github.com/acmeai-vn/SMR",
+  "license": "Apache-2.0",
+  "keywords": [
+    "smart-model-router",
+    "codex",
+    "claude-code",
+    "model-routing",
+    "token-cost"
+  ]
+}

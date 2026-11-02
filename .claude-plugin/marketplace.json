@@ -1,0 +1,20 @@
+{
+  "name": "acmeai-smr",
+  "description": "ACME AI Smart Model Router plugins for Codex and Claude Code.",
+  "owner": {
+    "name": "ACME AI",
+    "email": "support@acmeai.vn"
+  },
+  "plugins": [
+    {
+      "name": "smart-model-router",
+      "description": "Install and operate the SMR local routing daemon for Codex and Claude Code.",
+      "version": "0.1.0",
+      "source": "./",
+      "author": {
+        "name": "ACME AI",
+        "email": "support@acmeai.vn"
+      }
+    }
+  ]
+}
