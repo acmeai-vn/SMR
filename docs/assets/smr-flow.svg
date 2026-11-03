@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240" width="480" height="240" role="img" aria-labelledby="flowTitle flowDesc">
   <title id="flowTitle">Smart Model Router routes one coding request into one of four difficulty tiers</title>
-  <desc id="flowDesc">The coding agent sends one representative state to SMR. SMR asks the ACME AI classifier for a tier: easy, lower medium, upper medium or hard. SMR then forwards the original request, unchanged, to the model you configured for that tier: a cheap model, a balanced model, a strong model or the strongest model.</desc>
+  <desc id="flowDesc">The coding agent sends a request to SMR. SMR sends one representative text to the ACME AI classifier for a tier: easy, lower medium, upper medium or hard. SMR then sends the request to the model configured for that tier, changing only the model field.</desc>
 
   <defs>
     <style>
@@ -139,5 +139,5 @@
     <text class="tier-model" x="338" y="200">strongest model</text>
   </g>
 
-  <text class="eyebrow" x="18" y="228">ONE REPRESENTATIVE STATE · ORIGINAL REQUEST FORWARDED UNCHANGED</text>
+  <text class="eyebrow" x="18" y="228">ONE REPRESENTATIVE STATE · MODEL FIELD UPDATED FOR ROUTING</text>
 </svg>
