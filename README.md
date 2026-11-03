@@ -169,12 +169,12 @@ Or use the full Git URL:
     /plugin marketplace add https://github.com/acmeai-vn/SMR
     /plugin install smart-model-router@acmeai-smr
 
-Then invoke the SMR skill and follow its setup flow. Restart Claude Code after SMR updates the host configuration.
+Then invoke the SMR skill and follow its setup flow. The flow prints the blocks to add; you apply them and restart Claude Code yourself.
 
 ### What the plugin does not do
 
 - It does not contain a second router.
-- It does not modify `~/.codex/config.toml` or `~/.claude/settings.json` without confirmation.
+- It does not modify `~/.codex/config.toml` or `~/.claude/settings.json` at all.
 - It does not ask you to paste an API key, provider key, OAuth token, or session token into chat.
 - It does not set SMR as the default provider silently.
 
