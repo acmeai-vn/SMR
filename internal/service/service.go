@@ -37,13 +37,9 @@ const (
 )
 
 type Health struct {
-	Status     string `json:"status"`
-	Classifier struct {
-		BaseURL    string `json:"base_url"`
-		Configured bool   `json:"configured"`
-		LastOK     bool   `json:"last_ok"`
-		LastAt     string `json:"last_at"`
-	} `json:"classifier"`
+	Status       string `json:"status"`
+	Version      string `json:"version,omitempty"`
+	AuthRequired bool   `json:"auth_required,omitempty"`
 }
 
 // Signal budgets for stopping a detached daemon. The daemon drains in-flight

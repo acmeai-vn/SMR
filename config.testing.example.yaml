@@ -7,6 +7,15 @@
 
 listen: "127.0.0.1:8787"
 ui_listen: "127.0.0.1:8788"
+# To let another device on your LAN use this proxy:
+#   1. set listen to "0.0.0.0:8787" (keep ui_listen on loopback)
+#   2. run `smr keys add phone`
+#   3. run `smr restart`
+# access_keys is created automatically for the local machine on first start.
+# access_keys:
+#   - name: local
+#     key: "smr_lan_<32 base64url characters>"
+#     created_at: "2026-11-25T00:00:00Z"
 chat_completions_profile: codex
 
 classifier:

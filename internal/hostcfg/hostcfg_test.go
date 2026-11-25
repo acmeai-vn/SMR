@@ -22,12 +22,12 @@ func codexAt(t *testing.T) string {
 // complete and must not depend on the file already existing.
 func TestCodexInstructionsCoverBothEdits(t *testing.T) {
 	codexAt(t)
-	instructions, err := InstructionsFor(Codex, "127.0.0.1:18787")
+	instructions, err := InstructionsFor(Codex, "http://127.0.0.1:18787", "smr_lan_testkey")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(instructions.Parts) != 2 {
-		t.Fatalf("parts=%d, want the default key and the provider block", len(instructions.Parts))
+	if len(instructions.Parts) != 3 {
+		t.Fatalf("parts=%d, want the default key, the provider block and the environment", len(instructions.Parts))
 	}
 	if instructions.Parts[0].Code != `model_provider = "smr"` {
 		t.Fatalf("default key snippet=%q", instructions.Parts[0].Code)
@@ -35,8 +35,12 @@ func TestCodexInstructionsCoverBothEdits(t *testing.T) {
 	block := instructions.Parts[1].Code
 	if !strings.Contains(block, "[model_providers.smr]") ||
 		!strings.Contains(block, `base_url = "http://127.0.0.1:18787/v1"`) ||
-		!strings.Contains(block, `wire_api = "responses"`) {
+		!strings.Contains(block, `wire_api = "responses"`) ||
+		!strings.Contains(block, `env_key = "SMR_API_KEY"`) {
 		t.Fatalf("provider block is incomplete:\n%s", block)
+	}
+	if !strings.Contains(instructions.Parts[2].Code, `setx SMR_API_KEY "smr_lan_testkey"`) {
+		t.Fatalf("environment block does not carry the key:\n%s", instructions.Parts[2].Code)
 	}
 }
 
@@ -44,7 +48,7 @@ func TestCodexInstructionsCoverBothEdits(t *testing.T) {
 // model_provider after a [table] silently changes its meaning.
 func TestCodexDefaultKeyIsNotPartOfTheTable(t *testing.T) {
 	codexAt(t)
-	instructions, err := InstructionsFor(Codex, "")
+	instructions, err := InstructionsFor(Codex, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +67,7 @@ func TestClaudeInstructionsUseEnvFragment(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"theme":"dark"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	instructions, err := InstructionsFor(Claude, "")
+	instructions, err := InstructionsFor(Claude, "", "smr_lan_devicekey")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +79,7 @@ func TestClaudeInstructionsUseEnvFragment(t *testing.T) {
 	}
 	code := instructions.Parts[0].Code
 	if !strings.Contains(code, `"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"`) ||
-		!strings.Contains(code, `"ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"`) {
+		!strings.Contains(code, `"ANTHROPIC_AUTH_TOKEN": "smr_lan_devicekey"`) {
 		t.Fatalf("env fragment=%s", code)
 	}
 	// A whole {"env": {...}} document would replace unrelated settings when
@@ -91,7 +95,7 @@ func TestInstructionsDoNotWriteHostFiles(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := InstructionsFor(Codex, ""); err != nil {
+	if _, err := InstructionsFor(Codex, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)
@@ -104,7 +108,7 @@ func TestInstructionsDoNotWriteHostFiles(t *testing.T) {
 }
 
 func TestInstructionsForUnknownHost(t *testing.T) {
-	if _, err := InstructionsFor("nope", ""); err == nil {
+	if _, err := InstructionsFor("nope", "", ""); err == nil {
 		t.Fatal("expected an unknown-host error")
 	}
 }

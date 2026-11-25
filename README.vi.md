@@ -95,8 +95,20 @@ smr setup
 3. **Cài vào agent:** sao chép các khối cấu hình được hiển thị vào file của host, giữ các thiết lập đang có. SMR không tự sửa file cấu hình Codex hoặc Claude Code.
 4. **Kiểm tra:** khởi động lại host, chạy một tác vụ nhỏ rồi xem bộ đếm request, tier, phí và cache ở bước cuối.
 
-Với Codex, `model_provider = "smr"` phải nằm ở cấp cao nhất trong TOML, trước các `[table]`. Với Claude Code, ghép các mục được hướng dẫn vào object `env` hiện có. [Xem hướng dẫn theo từng host](docs/QUICKSTART.md).
+Với Codex, `model_provider = "smr"` phải nằm ở cấp cao nhất trong TOML, trước các `[table]`. Khối provider có `env_key = "SMR_API_KEY"`; đặt biến này bằng access key trong mục **Thiết bị truy cập** (`setx SMR_API_KEY "..."` trên Windows, `export SMR_API_KEY=...` trên macOS/Linux) rồi mở terminal mới. Với Claude Code, `ANTHROPIC_AUTH_TOKEN` chính là access key của thiết bị. Ghép các mục được hướng dẫn vào object `env` hiện có. [Xem hướng dẫn theo từng host](docs/QUICKSTART.md).
 
+## Dùng SMR từ máy khác
+
+Mặc định SMR chỉ nghe loopback. Để máy khác trong mạng nội bộ dùng chung:
+
+1. Tạo key cho thiết bị: `smr keys add phone`. Lệnh in key đầy đủ một lần và các khối cấu hình cho thiết bị đó.
+2. Đặt `listen: "0.0.0.0:8787"` trong cấu hình SMR. Giữ `ui_listen` ở loopback. Chạy `smr restart`.
+3. Chạy `smr keys list` để xem địa chỉ, ví dụ `advertise: http://192.168.1.20:8787`.
+4. Trên thiết bị kia, dán địa chỉ đó vào cấu hình Codex hoặc Claude Code và dùng access key ở bước 1.
+
+Mọi request tới proxy đều cần key, kể cả từ máy đang chạy SMR. Chỉ trang cấu hình và `smr keys` được sửa `access_keys`; đừng sửa file khi daemon đang chạy.
+
+Lần đầu bind ra LAN, Windows Firewall sẽ hỏi quyền; chỉ cho phép profile **Private**. Truy cập LAN dùng HTTP không mã hoá: access key và prompt đi dạng rõ, nên chỉ dùng trong mạng tin cậy hoặc bọc bằng Tailscale/WireGuard.
 ## Dữ liệu nào được gửi đi?
 
 - Bộ phân loại ACME AI nhận text người dùng cuối cùng; nếu không có thì dùng text trợ lý cuối cùng. Giới hạn mặc định là 12.000 ký tự. Với Responses input dạng chuỗi, SMR dùng chuỗi đó.

@@ -191,3 +191,18 @@ footer { display: flex; justify-content: space-between; gap: 16px; padding: 4px 
      block that only scrolls sideways hides the values on a phone. */
   .snippet pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+.keys-table { display: grid; gap: 4px; margin-top: 14px; }
+.keys-head, .keys-row { display: grid; grid-template-columns: minmax(0, 1.2fr) 150px 80px 150px 88px; gap: 8px; align-items: center; }
+.keys-head { padding: 0 8px 4px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.keys-row { padding: 8px; border-radius: 5px; border-top: 1px solid var(--line); }
+.keys-head + .keys-row { border-top: 0; }
+.keys-row:hover { background: var(--bg); }
+.keys-row span { min-width: 0; overflow-wrap: anywhere; }
+.keys-row strong, .keys-row small { display: block; }
+.access-add { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 16px; }
+.access-add label { flex: 1 1 220px; }
+@media (max-width: 760px) {
+  .keys-head { display: none; }
+  .keys-row { grid-template-columns: 1fr; gap: 4px; padding: 10px 8px; }
+  .keys-row form { margin-top: 4px; }
+}

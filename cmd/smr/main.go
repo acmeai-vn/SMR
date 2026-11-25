@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -62,6 +63,8 @@ func main() {
 		err = runUninstall(ctx, os.Args[2:])
 	case "migrate-config":
 		err = runMigrate()
+	case "keys":
+		err = runKeys(ctx, os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("SMR", version)
 	case "help", "--help", "-h":
@@ -88,6 +91,9 @@ Usage:
   smr update [--check] [--version vX.Y.Z] [--yes]
   smr uninstall [--purge]
   smr migrate-config
+  smr keys list
+  smr keys add <name>
+  smr keys revoke <name>
   smr version`)
 }
 
@@ -113,6 +119,10 @@ func runServe(ctx context.Context, args []string) error {
 			return fmt.Errorf("create default config: %w", err)
 		}
 	}
+	cfg := manager.Snapshot()
+	if err := cfg.ValidateListenerPlacement(); err != nil {
+		return err
+	}
 	// Take the single-instance lock before touching the token or the ports. A
 	// second start - an update, or `smr setup` racing a slow boot - must not
 	// replace the token the running daemon still expects.
@@ -122,10 +132,33 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = lock.Release() }()
 
-	cfg := manager.Snapshot()
-	proxyListener, err := net.Listen("tcp", cfg.Listen)
+	// The first start on an upgraded install has no access key. Create the key
+	// for this machine before validating: otherwise Codex and Claude Code would
+	// receive 401 and the only repair command would itself be blocked by the
+	// runtime check. This is the one place SMR edits config without a user
+	// action, and it only appends a key.
+	createdKey := ""
+	if len(cfg.AccessKeys) == 0 {
+		key, err := config.GenerateAccessKey()
+		if err != nil {
+			return err
+		}
+		key.Name = "local"
+		if err := cfg.AddAccessKey(key); err != nil {
+			return err
+		}
+		if err := manager.Update(cfg); err != nil {
+			return fmt.Errorf("save the first access key: %w", err)
+		}
+		cfg = manager.Snapshot()
+		createdKey = key.Key
+	}
+	if err := cfg.ValidateRuntime(); err != nil {
+		return err
+	}
+	proxyListener, err := net.Listen("tcp", cfg.BindAddr())
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", cfg.Listen, err)
+		return fmt.Errorf("listen %s: %w", cfg.BindAddr(), err)
 	}
 	defer proxyListener.Close()
 	uiListener, err := net.Listen("tcp", cfg.UIListen)
@@ -149,6 +182,9 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer logFile.Close()
 	logger := slog.New(slog.NewTextHandler(io.MultiWriter(os.Stdout, logFile), &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if createdKey != "" {
+		logger.Info("created the local SMR access key; add it to Codex or Claude Code", "name", "local", "key", createdKey)
+	}
 
 	router := proxy.New(manager, logger)
 	setupUI, err := ui.New(manager, router.Snapshot, dataDir, token, version, logger)
@@ -169,14 +205,14 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	errCh := make(chan error, 2)
 	go func() {
-		logger.Info("SMR listening", "addr", cfg.Listen, "version", version)
+		logger.Info("SMR listening", "addr", cfg.BindAddr(), "version", version)
 		errCh <- proxyServer.Serve(proxyListener)
 	}()
 	go func() {
 		logger.Info("setup UI listening", "addr", cfg.UIListen)
 		errCh <- uiServer.Serve(uiListener)
 	}()
-	fmt.Printf("SMR setup: http://%s/?token=%s\n", cfg.UIListen, token)
+	fmt.Printf("SMR setup: http://%s/?token=%s\n", cfg.UIConnectAddr(), token)
 
 	select {
 	case <-ctx.Done():
@@ -201,7 +237,7 @@ func runSetup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := service.HealthCheck(ctx, "http://"+cfg.Listen); err != nil {
+	if _, err := service.HealthCheck(ctx, "http://"+cfg.ConnectAddr()); err != nil {
 		// The daemon may have been stopped by a reboot, a crash or an update.
 		// Restart through the service manager instead of starting a detached
 		// process: a detached daemon holds the pid lock, so a later
@@ -217,7 +253,7 @@ func runSetup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("setup token not found; restart SMR, then run `smr setup` again")
 	}
-	target := fmt.Sprintf("http://%s/?token=%s", cfg.UIListen, token)
+	target := fmt.Sprintf("http://%s/?token=%s", cfg.UIConnectAddr(), token)
 	fmt.Println("Opening SMR setup:", target)
 	if err := service.OpenBrowser(ctx, target); err != nil {
 		fmt.Println("Open this URL manually:", target)
@@ -237,8 +273,8 @@ func restartDaemon(ctx context.Context) error {
 	if err := service.Restart(ctx); err != nil {
 		return err
 	}
-	if err := waitForHealth(ctx, "http://"+cfg.Listen, 15*time.Second); err != nil {
-		return fmt.Errorf("SMR restarted but is not healthy at %s: %w", cfg.Listen, err)
+	if err := waitForHealth(ctx, "http://"+cfg.ConnectAddr(), 15*time.Second); err != nil {
+		return fmt.Errorf("SMR restarted but is not healthy at %s: %w", cfg.ConnectAddr(), err)
 	}
 	return nil
 }
@@ -268,12 +304,18 @@ func runStatus(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	health, err := service.HealthCheck(ctx, "http://"+cfg.Listen)
+	health, err := service.HealthCheck(ctx, "http://"+cfg.ConnectAddr())
 	if err != nil {
-		return fmt.Errorf("SMR is not reachable at %s: %w", cfg.Listen, err)
+		return fmt.Errorf("SMR is not reachable at %s: %w", cfg.ConnectAddr(), err)
 	}
-	body, _ := json.MarshalIndent(health, "", "  ")
-	fmt.Println(string(body))
+	fmt.Printf("daemon: %s (version %s)\n", health.Status, health.Version)
+	keyState := "missing"
+	if cfg.Classifier.APIKey != "" {
+		keyState = "configured"
+	}
+	fmt.Printf("classifier: %s (key %s)\n", cfg.Classifier.BaseURL, keyState)
+	fmt.Printf("advertise: %s\n", cfg.AdvertiseURL())
+	fmt.Printf("access keys: %d\n", len(cfg.AccessKeys))
 	return nil
 }
 
@@ -290,6 +332,17 @@ func runDoctor(ctx context.Context) error {
 	fmt.Println("config: OK", configPath)
 	fmt.Println("data:  ", dataDir)
 	fmt.Println("listen:", cfg.Listen, " ui:", cfg.UIListen)
+	if err := cfg.ValidateRuntime(); err != nil {
+		fmt.Println("runtime: FAIL", err)
+	} else {
+		fmt.Println("runtime: OK")
+	}
+	for _, key := range cfg.AccessKeys {
+		fmt.Printf("access key: %s (created %s)\n", key.Name, key.CreatedAt)
+	}
+	if !cfg.IsLoopbackListen() {
+		fmt.Println("warning: the proxy is reachable over the LAN over plain HTTP; use a private network such as Tailscale or WireGuard")
+	}
 	if cfg.Classifier.APIKey == "" {
 		fmt.Println("classifier key: MISSING (run `smr setup`)")
 	} else {
@@ -302,7 +355,7 @@ func runDoctor(ctx context.Context) error {
 			fmt.Printf("classifier connection: OK (balance %d %s, cache %ds)\n", account.BalanceVND, account.Currency, account.CacheTTLSeconds)
 		}
 	}
-	if _, err := service.HealthCheck(ctx, "http://"+cfg.Listen); err != nil {
+	if _, err := service.HealthCheck(ctx, "http://"+cfg.ConnectAddr()); err != nil {
 		fmt.Println("daemon: FAIL", err)
 	} else {
 		fmt.Println("daemon: OK")
@@ -536,4 +589,260 @@ func safeRemoveAll(path string) error {
 		return err
 	}
 	return nil
+}
+
+func runKeys(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: smr keys list | add <name> | revoke <name>")
+	}
+	switch args[0] {
+	case "list":
+		return keysList(ctx)
+	case "add":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: smr keys add <name>")
+		}
+		return keysAdd(ctx, strings.Join(args[1:], " "))
+	case "revoke":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: smr keys revoke <name>")
+		}
+		return keysRevoke(ctx, strings.Join(args[1:], " "))
+	default:
+		return fmt.Errorf("unknown keys command %q; use list, add or revoke", args[0])
+	}
+}
+
+func keysList(ctx context.Context) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	usage := map[string]proxy.KeyStats{}
+	if stats, err := fetchKeyStats(ctx, cfg); err == nil {
+		for _, item := range stats {
+			usage[item.Name] = item
+		}
+	}
+	fmt.Printf("advertise: %s\n", cfg.AdvertiseURL())
+	fmt.Printf("%-24s %-22s %8s  %s\n", "NAME", "CREATED", "REQUESTS", "LAST SEEN")
+	for _, key := range cfg.AccessKeys {
+		item := usage[key.Name]
+		last := item.LastSeenAt
+		if last == "" {
+			last = "-"
+		}
+		fmt.Printf("%-24s %-22s %8d  %s\n", key.Name, key.CreatedAt, item.Requests, last)
+	}
+	if len(cfg.AccessKeys) == 0 {
+		fmt.Println("(no access keys; run `smr keys add <name>`)")
+	}
+	if cfg.IsLoopbackListen() {
+		fmt.Println("LAN access is off: listen is loopback. Set `listen: 0.0.0.0:8787` and restart SMR to let other devices connect.")
+	} else {
+		fmt.Println("warning: keys and prompts travel over the LAN without TLS; use a trusted network or a VPN.")
+	}
+	return nil
+}
+
+func keysAdd(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if err := config.ValidateAccessKeyName(name); err != nil {
+		return err
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	manager, configPath, dataDir, err := loadOfflineManager()
+	if err != nil {
+		return err
+	}
+	if daemonAlive(ctx, cfg) {
+		if !uiAlive(ctx, cfg) {
+			return fmt.Errorf("SMR is running but its setup UI is unreachable; run `smr restart`, then retry")
+		}
+		result, err := uiAccessRequest(ctx, cfg, dataDir, "/access/add", url.Values{"name": {name}})
+		if err != nil {
+			return fmt.Errorf("add the key through the running daemon: %w", err)
+		}
+		key, _ := result["key"].(string)
+		address, _ := result["advertise_url"].(string)
+		fmt.Printf("Access key %q created: %s\n", name, key)
+		return printKeyInstructions(cfg, config.AccessKey{Name: name, Key: key}, address)
+	}
+
+	key, err := config.GenerateAccessKey()
+	if err != nil {
+		return err
+	}
+	key.Name = name
+	live := manager.Snapshot()
+	if err := live.AddAccessKey(key); err != nil {
+		return err
+	}
+	if err := manager.Update(live); err != nil {
+		return fmt.Errorf("save %s: %w", configPath, err)
+	}
+	fmt.Printf("Access key %q created: %s\n", name, key.Key)
+	fmt.Println("SMR is not running; the key takes effect the next time it starts.")
+	return printKeyInstructions(live, key, live.AdvertiseURL())
+}
+
+func keysRevoke(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	manager, _, dataDir, err := loadOfflineManager()
+	if err != nil {
+		return err
+	}
+	if daemonAlive(ctx, cfg) {
+		if !uiAlive(ctx, cfg) {
+			return fmt.Errorf("SMR is running but its setup UI is unreachable; run `smr restart`, then retry")
+		}
+		if _, err := uiAccessRequest(ctx, cfg, dataDir, "/access/revoke", url.Values{"name": {name}}); err != nil {
+			return fmt.Errorf("revoke the key through the running daemon: %w", err)
+		}
+		fmt.Printf("Access key %q revoked; it stops working immediately.\n", name)
+		return nil
+	}
+	live := manager.Snapshot()
+	if _, ok := live.AccessKey(name); !ok {
+		return fmt.Errorf("access key %q does not exist", name)
+	}
+	live.RemoveAccessKey(name)
+	if err := live.ValidateRuntime(); err != nil {
+		return fmt.Errorf("refusing to remove the last key while listening beyond loopback: %w", err)
+	}
+	if err := manager.Update(live); err != nil {
+		return err
+	}
+	fmt.Printf("Access key %q removed. SMR is not running; restart it to apply the change.\n", name)
+	return nil
+}
+
+func loadOfflineManager() (*config.Manager, string, string, error) {
+	configPath, dataDir, err := paths()
+	if err != nil {
+		return nil, "", "", err
+	}
+	manager, err := config.LoadManager(configPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return manager, configPath, dataDir, nil
+}
+
+func daemonAlive(ctx context.Context, cfg config.Config) bool {
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := service.HealthCheck(probe, "http://"+cfg.ConnectAddr())
+	return err == nil
+}
+
+// uiAlive is separate from daemonAlive on purpose. If the proxy answers but
+// the setup UI does not, editing the file behind the daemon's back would make
+// `keys revoke` report success while the running process keeps the old key.
+func uiAlive(ctx context.Context, cfg config.Config) bool {
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probe, http.MethodGet, "http://"+cfg.UIConnectAddr()+"/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func fetchKeyStats(ctx context.Context, cfg config.Config) ([]proxy.KeyStats, error) {
+	key, ok := cfg.LocalAccessKey()
+	if !ok {
+		return nil, fmt.Errorf("no access key")
+	}
+	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probe, http.MethodGet, "http://"+cfg.ConnectAddr()+"/stats", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats returned %d", resp.StatusCode)
+	}
+	var stats proxy.Stats
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&stats); err != nil {
+		return nil, err
+	}
+	return stats.Keys, nil
+}
+
+func uiAccessRequest(ctx context.Context, cfg config.Config, dataDir, path string, form url.Values) (map[string]any, error) {
+	token, err := ui.ReadTokenFile(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("read UI token: %w", err)
+	}
+	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probe, http.MethodPost,
+		"http://"+cfg.UIConnectAddr()+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-SMR-UI-Token", token)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("setup UI returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("decode setup UI response: %w", err)
+	}
+	return result, nil
+}
+
+func printKeyInstructions(cfg config.Config, key config.AccessKey, advertised string) error {
+	if strings.TrimSpace(advertised) == "" {
+		advertised = cfg.AdvertiseURL()
+	}
+	for _, host := range []string{hostcfg.Codex, hostcfg.Claude} {
+		instructions, err := hostcfg.InstructionsFor(host, advertised, key.Key)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\n%s (%s):\n", hostLabel(host), instructions.Path)
+		for _, part := range instructions.Parts {
+			fmt.Println(part.Code)
+			fmt.Println()
+		}
+	}
+	if cfg.IsLoopbackListen() {
+		fmt.Println("To let another device connect, set `listen: 0.0.0.0:8787` in the SMR config and restart it.")
+	}
+	return nil
+}
+
+func hostLabel(host string) string {
+	if host == hostcfg.Claude {
+		return "Claude Code"
+	}
+	return "Codex"
 }

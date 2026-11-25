@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/acmeai-vn/SMR/internal/config"
+	"github.com/acmeai-vn/SMR/internal/hostcfg"
 	"github.com/acmeai-vn/SMR/internal/proxy"
 )
 
@@ -712,5 +713,164 @@ func authenticate(t *testing.T, client *http.Client, serverURL string) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("authenticate status=%d", resp.StatusCode)
+	}
+}
+
+const validUIKey = "smr_lan_0123456789abcdefghijklmnopqrstuv"
+
+func TestAccessCardIsIndependentFromProfileTabs(t *testing.T) {
+	_, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	cfg := manager.Snapshot()
+	cfg.AccessKeys = []config.AccessKey{{Name: "local", Key: validUIKey, CreatedAt: "2026-11-25T00:00:00Z"}}
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getBody(t, client, httpServer.URL+"/")
+	if !strings.Contains(body, `id="access"`) || !strings.Contains(body, "Thiết bị truy cập") {
+		t.Fatalf("device access card missing:\n%s", body)
+	}
+	if strings.Contains(body, `id="tab-access"`) {
+		t.Fatal("device access must not be rendered as a profile tab")
+	}
+	if !strings.Contains(body, validUIKey) {
+		t.Fatal("the local key is not shown in the step 3 snippets")
+	}
+	if !strings.Contains(body, `env_key = &#34;SMR_API_KEY&#34;`) {
+		t.Fatalf("Codex block does not set env_key:\n%s", body)
+	}
+}
+
+func TestAccessAddAndRevokeThroughBrowser(t *testing.T) {
+	server, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+
+	resp, err := client.PostForm(httpServer.URL+"/access/add", url.Values{
+		"csrf": {server.csrf},
+		"name": {"may-cua-vo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("add status=%d body=%s", resp.StatusCode, body)
+	}
+	key, ok := manager.Snapshot().AccessKey("may-cua-vo")
+	if !ok || !strings.HasPrefix(key.Key, config.AccessKeyPrefix) {
+		t.Fatalf("key not saved: %#v", key)
+	}
+	if !strings.Contains(string(body), key.Key) {
+		t.Fatalf("new key was not shown:\n%s", body)
+	}
+
+	resp, err = client.PostForm(httpServer.URL+"/access/revoke", url.Values{
+		"csrf": {server.csrf},
+		"name": {"may-cua-vo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("revoke status=%d", resp.StatusCode)
+	}
+	if _, ok := manager.Snapshot().AccessKey("may-cua-vo"); ok {
+		t.Fatal("key still exists after revoke")
+	}
+	if !strings.Contains(resp.Request.URL.String(), "revoked=1") {
+		t.Fatalf("revoke did not redirect with a notice: %s", resp.Request.URL)
+	}
+}
+
+// The CLI holds ui-token but cannot know the per-process CSRF value. The token
+// header is enough to add a key through the same single writer.
+func TestAccessAddAcceptsTheUITokenHeader(t *testing.T) {
+	_, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/access/add",
+		strings.NewReader("name=cli-device"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-SMR-UI-Token", "setup-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"key":"smr_lan_`) || !strings.Contains(string(body), `"advertise_url"`) {
+		t.Fatalf("JSON response is incomplete: %s", body)
+	}
+	if _, ok := manager.Snapshot().AccessKey("cli-device"); !ok {
+		t.Fatal("key was not saved")
+	}
+}
+
+func TestRevokeLastKeyIsRefusedWhenListeningOnLAN(t *testing.T) {
+	server, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	cfg := manager.Snapshot()
+	cfg.Listen = "0.0.0.0:8787"
+	cfg.AccessKeys = []config.AccessKey{{Name: "local", Key: validUIKey}}
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.PostForm(httpServer.URL+"/access/revoke", url.Values{
+		"csrf": {server.csrf},
+		"name": {"local"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	if _, ok := manager.Snapshot().AccessKey("local"); !ok {
+		t.Fatal("the last key was removed")
+	}
+}
+
+func TestStepThreeUsesTheLANAddressAndKey(t *testing.T) {
+	_, manager, httpServer, client, _ := testUI(t)
+	authenticate(t, client, httpServer.URL)
+	cfg := manager.Snapshot()
+	cfg.Listen = "10.1.2.3:8787"
+	cfg.AccessKeys = []config.AccessKey{{Name: "local", Key: validUIKey}}
+	if err := manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	body := getBody(t, client, httpServer.URL+"/")
+	if !strings.Contains(body, `base_url = &#34;http://10.1.2.3:8787/v1&#34;`) {
+		t.Fatalf("Codex block does not use the advertised LAN URL:\n%s", body)
+	}
+	if !strings.Contains(body, validUIKey) {
+		t.Fatalf("Codex/Claude blocks do not carry the access key:\n%s", body)
+	}
+}
+
+func TestHostUsesSMRAcceptsPrivateAddress(t *testing.T) {
+	cfg := config.Default()
+	cfg.Listen = "0.0.0.0:8787"
+	detection := hostcfg.Detection{BaseURL: "http://192.168.1.20:8787/v1", Provider: "custom"}
+	if !hostUsesSMR(detection, cfg) {
+		t.Fatal("a private LAN address on the same port must count as SMR")
+	}
+	detection.BaseURL = "http://192.168.1.20:9999/v1"
+	if hostUsesSMR(detection, cfg) {
+		t.Fatal("a different port must not count as SMR")
 	}
 }

@@ -26,9 +26,9 @@ Ask Codex: “Set up Smart Model Router.” Follow the setup workflow, review th
 
 On the **Codex** tab, assign a provider base URL, API key and model to each of `easy`, `lower_medium`, `upper_medium` and `hard`. Use model IDs your provider currently supports.
 
-Copy the provider block shown by setup into `~/.codex/config.toml`. If you choose SMR as the default, put `model_provider = "smr"` at the top level, before any `[table]`. Merge with existing settings so there is only one default provider key. Restart Codex.
+Copy the provider block shown by setup into `~/.codex/config.toml`. It contains `env_key = "SMR_API_KEY"`, so also set that variable to the access key shown under **Device access** (`setx SMR_API_KEY "..."` on Windows, `export SMR_API_KEY=...` on macOS/Linux), then open a new terminal. If you choose SMR as the default, put `model_provider = "smr"` at the top level, before any `[table]`. Merge with existing settings so there is only one default provider key. Restart Codex.
 
-The local Responses base URL is `http://127.0.0.1:8787/v1`. See [the full configuration example](../config.example.yaml) and [host configuration](../README.md#host-configuration).
+The local Responses base URL is `http://127.0.0.1:8787/v1`. To use SMR from another device on your network, see [Use SMR from another device](../README.md#use-smr-from-another-device). See [the full configuration example](../config.example.yaml) and [host configuration](../README.md#host-configuration).
 
 ## Claude Code
 
@@ -46,11 +46,11 @@ Merge the entries shown by setup into the existing `env` object in `~/.claude/se
 ```json
 {
   "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
-  "ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"
+  "ANTHROPIC_AUTH_TOKEN": "smr_lan_..."
 }
 ```
 
-This is the content to merge into `env`, not a replacement for the entire settings file. The placeholder is not a provider credential; SMR uses the provider key from your Claude profile. Review any existing authentication settings and restart Claude Code after the edit.
+This is the content to merge into `env`, not a replacement for the entire settings file. `ANTHROPIC_AUTH_TOKEN` is the device access key from **Device access**, not a provider credential; SMR checks it and then uses the provider key from your Claude profile. Review any existing authentication settings and restart Claude Code after the edit.
 
 ## Direct installation
 

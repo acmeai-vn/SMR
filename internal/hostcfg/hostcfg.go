@@ -16,8 +16,8 @@ const (
 	Codex  = "codex"
 	Claude = "claude"
 
-	claudePlaceholder = "smr-local-placeholder"
-	defaultListen     = "127.0.0.1:8787"
+	claudePlaceholder = "smr_lan_replace_with_an_access_key"
+	defaultBaseURL    = "http://127.0.0.1:8787"
 )
 
 type Detection struct {
@@ -186,16 +186,26 @@ type Instructions struct {
 // breaks the agent in ways the installer cannot see, and only the user knows
 // which provider should stay the default. Showing exact blocks keeps every
 // change visible and leaves the edit with the person who owns the file.
-func InstructionsFor(host, listen string) (Instructions, error) {
+//
+// baseURL is the full URL the other machine should call, already resolved via
+// config.AdvertiseURL. accessKey is filled into both hosts so a new device only
+// has to paste; without one the blocks carry a visible placeholder.
+func InstructionsFor(host, baseURL, accessKey string) (Instructions, error) {
 	path, err := HostPath(host)
 	if err != nil {
 		return Instructions{}, err
 	}
-	listen = strings.TrimSpace(listen)
-	if listen == "" {
-		listen = defaultListen
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = defaultBaseURL
 	}
-	base := "http://" + listen
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	key := strings.TrimSpace(accessKey)
+	if key == "" {
+		key = claudePlaceholder
+	}
 	exists := false
 	if _, err := os.Stat(path); err == nil {
 		exists = true
@@ -217,6 +227,16 @@ func InstructionsFor(host, listen string) (Instructions, error) {
 					`name = "Smart Model Router"`,
 					`base_url = "` + base + `/v1"`,
 					`wire_api = "responses"`,
+					`env_key = "SMR_API_KEY"`,
+				}, "\n"),
+			},
+			{
+				TitleKey: "step3.codex.env",
+				Code: strings.Join([]string{
+					`# Windows (PowerShell), then open a new terminal:`,
+					`setx SMR_API_KEY "` + key + `"`,
+					`# macOS / Linux:`,
+					`export SMR_API_KEY="` + key + `"`,
 				}, "\n"),
 			},
 		}
@@ -226,7 +246,7 @@ func InstructionsFor(host, listen string) (Instructions, error) {
 		// over it would delete them.
 		result.Parts = []Part{{TitleKey: "step3.claude.block", Code: strings.Join([]string{
 			`"ANTHROPIC_BASE_URL": "` + base + `",`,
-			`"ANTHROPIC_AUTH_TOKEN": "` + claudePlaceholder + `"`,
+			`"ANTHROPIC_AUTH_TOKEN": "` + key + `"`,
 		}, "\n")}}
 	default:
 		return Instructions{}, fmt.Errorf("unknown host %q", host)

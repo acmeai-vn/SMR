@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -88,6 +89,20 @@ type stepView struct {
 	Done  bool
 }
 
+type accessKeyView struct {
+	Name       string
+	CreatedAt  string
+	Requests   int64
+	LastSeenAt string
+	Hint       string
+}
+
+type newAccessKeyView struct {
+	Name         string
+	Key          string
+	AdvertiseURL string
+}
+
 type testResult struct {
 	OK              bool
 	Error           string
@@ -128,9 +143,16 @@ type pageData struct {
 	// environment variable, not the saved file, supplies the live value.
 	EnvKeyOverride     bool
 	EnvBaseURLOverride bool
-	Test               *testResult
-	Error              string
-	Notice             string
+	// AccessKeys is the LAN device list. It is independent from Profiles: a
+	// profile is a request dialect, a key is a device.
+	AccessKeys       []accessKeyView
+	AccessKeyMissing bool
+	ListenIsLAN      bool
+	AdvertiseURL     string
+	NewAccessKey     *newAccessKeyView
+	Test             *testResult
+	Error            string
+	Notice           string
 }
 
 type logsData struct {
@@ -207,6 +229,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", s.authorize(s.handleIndex))
 	mux.HandleFunc("POST /save", s.authorize(s.handleSave))
 	mux.HandleFunc("POST /test", s.authorize(s.handleTest))
+	mux.HandleFunc("POST /access/add", s.authorize(s.handleAccessAdd))
+	mux.HandleFunc("POST /access/revoke", s.authorize(s.handleAccessRevoke))
 	mux.HandleFunc("GET /logs", s.authorize(s.handleLogs))
 	return securityHeaders(mux)
 }
@@ -234,6 +258,13 @@ func (s *Server) handleTabsCSS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The CLI holds the same token file but cannot read the per-process
+		// CSRF value. Accepting the token in a header gives `smr keys` a way to
+		// change keys through the single writer (the daemon) without a restart.
+		if equal(r.Header.Get("X-SMR-UI-Token"), s.token) {
+			next(w, r)
+			return
+		}
 		if candidate := r.URL.Query().Get("token"); candidate != "" {
 			if equal(candidate, s.token) {
 				http.SetCookie(w, &http.Cookie{
@@ -277,6 +308,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		} else {
 			data.Notice = tr(lang, "notice.saved")
 		}
+	case "revoked":
+		data.Notice = tr(lang, "notice.access_revoked")
 	}
 	s.render(w, http.StatusOK, "page", data)
 }
@@ -321,6 +354,28 @@ func (s *Server) baseData(lang string) pageData {
 	}
 	data.DashboardURL, data.EnvironmentLabel = dashboardFor(cfg.Classifier.BaseURL)
 	data.EnvKeyOverride, data.EnvBaseURLOverride = config.EnvOverrides()
+	data.ListenIsLAN = !cfg.IsLoopbackListen()
+	data.AdvertiseURL = cfg.AdvertiseURL()
+	localKey, hasLocalKey := cfg.LocalAccessKey()
+	data.AccessKeyMissing = !hasLocalKey
+	usage := make(map[string]proxy.KeyStats, len(data.Stats.Keys))
+	for _, item := range data.Stats.Keys {
+		usage[item.Name] = item
+	}
+	for _, key := range cfg.AccessKeys {
+		item := usage[key.Name]
+		last := item.LastSeenAt
+		if last == "" {
+			last = "—"
+		}
+		data.AccessKeys = append(data.AccessKeys, accessKeyView{
+			Name:       key.Name,
+			CreatedAt:  key.CreatedAt,
+			Requests:   item.Requests,
+			LastSeenAt: last,
+			Hint:       config.DescribeAccessKey(key.Key),
+		})
+	}
 	names := profileNames(cfg.Profiles)
 	for _, name := range names {
 		profile := cfg.Profiles[name]
@@ -345,9 +400,13 @@ func (s *Server) baseData(lang string) pageData {
 		view := hostView{
 			Detection: detection,
 			Label:     profileLabel(detection.Host),
-			UsesSMR:   hostUsesSMR(detection, cfg.Listen),
+			UsesSMR:   hostUsesSMR(detection, cfg),
 		}
-		instructions, err := hostcfg.InstructionsFor(detection.Host, cfg.Listen)
+		keyText := ""
+		if hasLocalKey {
+			keyText = localKey.Key
+		}
+		instructions, err := hostcfg.InstructionsFor(detection.Host, data.AdvertiseURL, keyText)
 		if err != nil {
 			// Leaving step 3 empty looks like SMR has nothing to add; say why.
 			if data.Error == "" {
@@ -446,16 +505,37 @@ func dashboardFor(baseURL string) (string, string) {
 	return "https://llm.acmeai.vn", ""
 }
 
-// hostUsesSMR reports whether a host already points at this SMR instance.
-func hostUsesSMR(detection hostcfg.Detection, listen string) bool {
+// hostUsesSMR reports whether a host already points at this SMR instance. It
+// must accept both loopback and the advertised LAN address: a page that says
+// "not pointed at SMR" after the edit looks broken even though the edit is
+// correct.
+func hostUsesSMR(detection hostcfg.Detection, cfg config.Config) bool {
 	if detection.Provider == "smr" {
 		return true
 	}
-	_, port, err := net.SplitHostPort(listen)
-	if err != nil || port == "" || detection.BaseURL == "" {
+	if strings.TrimSpace(detection.BaseURL) == "" {
 		return false
 	}
-	return strings.Contains(detection.BaseURL, "127.0.0.1:"+port)
+	parsed, err := url.Parse(detection.BaseURL)
+	if err != nil {
+		return false
+	}
+	_, listenPort, err := net.SplitHostPort(cfg.Listen)
+	if err != nil || parsed.Port() != listenPort {
+		return false
+	}
+	host := parsed.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		return true
+	}
+	if advertised, err := url.Parse(cfg.AdvertiseURL()); err == nil {
+		return strings.EqualFold(advertised.Hostname(), host)
+	}
+	return false
 }
 
 func buildSteps(cfg config.Config, detections []hostView, stats proxy.Stats, lang string) []stepView {
@@ -630,6 +710,101 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "page", data)
 }
 
+func (s *Server) handleAccessAdd(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	lang := s.language(w, r)
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	fail := func(status int, message string) {
+		if wantsJSON(r) {
+			writeUIJSON(w, status, map[string]any{"error": message})
+			return
+		}
+		data := s.baseData(lang)
+		data.Error = message
+		s.render(w, status, "page", data)
+	}
+	if err := config.ValidateAccessKeyName(name); err != nil {
+		fail(http.StatusBadRequest, err.Error())
+		return
+	}
+	key, err := config.GenerateAccessKey()
+	if err != nil {
+		fail(http.StatusInternalServerError, err.Error())
+		return
+	}
+	key.Name = name
+	cfg := s.manager.Snapshot()
+	if err := cfg.AddAccessKey(key); err != nil {
+		fail(http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.manager.Update(cfg); err != nil {
+		fail(http.StatusInternalServerError, trf(lang, "error.save", err.Error()))
+		return
+	}
+	if wantsJSON(r) {
+		writeUIJSON(w, http.StatusOK, map[string]any{
+			"name":          key.Name,
+			"key":           key.Key,
+			"created_at":    key.CreatedAt,
+			"advertise_url": cfg.AdvertiseURL(),
+		})
+		return
+	}
+	data := s.baseData(lang)
+	data.NewAccessKey = &newAccessKeyView{Name: key.Name, Key: key.Key, AdvertiseURL: data.AdvertiseURL}
+	s.render(w, http.StatusOK, "page", data)
+}
+
+func (s *Server) handleAccessRevoke(w http.ResponseWriter, r *http.Request) {
+	if !s.checkCSRF(w, r) {
+		return
+	}
+	lang := s.language(w, r)
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	fail := func(status int, message string) {
+		if wantsJSON(r) {
+			writeUIJSON(w, status, map[string]any{"error": message})
+			return
+		}
+		data := s.baseData(lang)
+		data.Error = message
+		s.render(w, status, "page", data)
+	}
+	cfg := s.manager.Snapshot()
+	if _, ok := cfg.AccessKey(name); !ok {
+		fail(http.StatusNotFound, trf(lang, "error.access_missing", name))
+		return
+	}
+	cfg.RemoveAccessKey(name)
+	// Removing the last key while listening beyond loopback would make the
+	// next start fail. Refuse now, while the daemon is still running.
+	if err := cfg.ValidateRuntime(); err != nil {
+		fail(http.StatusBadRequest, trf(lang, "error.access_last", err.Error()))
+		return
+	}
+	if err := s.manager.Update(cfg); err != nil {
+		fail(http.StatusInternalServerError, trf(lang, "error.save", err.Error()))
+		return
+	}
+	if wantsJSON(r) {
+		writeUIJSON(w, http.StatusOK, map[string]any{"revoked": name})
+		return
+	}
+	http.Redirect(w, r, "/?revoked=1&lang="+url.QueryEscape(lang), http.StatusSeeOther)
+}
+
+func wantsJSON(r *http.Request) bool {
+	return r.Header.Get("X-SMR-UI-Token") != "" || strings.Contains(r.Header.Get("Accept"), "application/json")
+}
+
+func writeUIJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	lang := s.language(w, r)
 	path := filepath.Join(s.dataDir, LogFile)
@@ -650,6 +825,9 @@ func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Invalid form.", http.StatusBadRequest)
 		return false
+	}
+	if equal(r.Header.Get("X-SMR-UI-Token"), s.token) {
+		return true
 	}
 	if !equal(r.PostFormValue("csrf"), s.csrf) {
 		http.Error(w, "CSRF token invalid.", http.StatusForbidden)

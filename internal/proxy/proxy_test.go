@@ -14,6 +14,8 @@ import (
 	"github.com/acmeai-vn/SMR/internal/config"
 )
 
+const testAccessKey = "smr_lan_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 type upstreamCall struct {
 	path   string
 	body   map[string]any
@@ -36,6 +38,7 @@ func testServer(t *testing.T, classifierHandler, upstreamHandler http.HandlerFun
 	t.Cleanup(upstreamServer.Close)
 
 	cfg := config.Default()
+	cfg.AccessKeys = []config.AccessKey{{Name: "test-device", Key: testAccessKey, CreatedAt: "2026-11-25T00:00:00Z"}}
 	cfg.Classifier.BaseURL = classifierServer.URL
 	cfg.Classifier.APIKey = "acme_sk_test"
 	cfg.Profiles["codex"].Tiers["easy"] = config.Tier{BaseURL: upstreamServer.URL + "/v1", APIKey: "codex-easy", Model: "small"}
@@ -81,7 +84,7 @@ func TestResponsesRoutesAndReplacesModel(t *testing.T) {
 			_, _ = w.Write([]byte("data: ok\n\n"))
 		})
 	body := `{"model":"smart","stream":true,"tools":[{"type":"function","name":"shell"}],"input":[{"role":"user","content":[{"type":"input_text","text":"fix the failing test"}]}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -119,7 +122,7 @@ func TestMessagesUsesXAPIKeyAndPreservesBeta(t *testing.T) {
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		})
 	body := `{"model":"smart","max_tokens":100,"messages":[{"role":"user","content":"hello"}],"stream":false}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req := accessRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 	req.Header.Set("Anthropic-Beta", "tools-2024")
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
@@ -149,7 +152,7 @@ func TestPaymentRequiredStopsBeforeModel(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("model must not be called")
 		})
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	req := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusPaymentRequired || upstreamCalls.Load() != 0 {
@@ -164,7 +167,7 @@ func TestUnauthorizedDoesNotFallback(t *testing.T) {
 	server, _, upstreamCalls := testServer(t,
 		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) },
 		func(w http.ResponseWriter, r *http.Request) { t.Fatal("model must not be called") })
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	req := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway || upstreamCalls.Load() != 0 {
@@ -183,7 +186,7 @@ func TestTransientClassifierUsesFallbackTier(t *testing.T) {
 			gotModel = payload["model"]
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		})
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	req := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -207,7 +210,7 @@ func TestEmptyStateSkipsClassifierAndUsesFallback(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 	body := `{"input":[{"role":"user","content":[{"type":"tool_result","content":"only output"}]}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if classifierCalls.Load() != 0 || gotModel != "fallback-model" {
@@ -229,7 +232,7 @@ func TestCountTokensIsFreeAndUsesClaudeEasy(t *testing.T) {
 		gotPath = r.URL.Path
 		_, _ = w.Write([]byte(`{"input_tokens":42}`))
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"smart","messages":[{"role":"user","content":"hi"}]}`))
+	req := accessRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"smart","messages":[{"role":"user","content":"hi"}]}`))
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -245,7 +248,7 @@ func TestCountTokensIsFreeAndUsesClaudeEasy(t *testing.T) {
 
 func TestModelsIncludesSmartAlias(t *testing.T) {
 	server, _, _ := testServer(t, classifierOK("easy", "miss", 1), func(w http.ResponseWriter, r *http.Request) {})
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req := accessRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -267,5 +270,113 @@ func TestModelsIncludesSmartAlias(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("smart alias missing: %s", rec.Body.String())
+	}
+}
+
+func accessRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Header.Set("Authorization", "Bearer "+testAccessKey)
+	return req
+}
+
+func TestHealthNeedsNoKeyAndHidesClassifier(t *testing.T) {
+	server, _, _ := testServer(t, classifierOK("easy", "miss", 1), func(w http.ResponseWriter, r *http.Request) {})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "classifier") || strings.Contains(body, "api-testing") {
+		t.Fatalf("health leaks classifier state: %s", body)
+	}
+	if !strings.Contains(body, `"auth_required":true`) {
+		t.Fatalf("health does not advertise authentication: %s", body)
+	}
+}
+
+func TestMissingAccessKeyUsesOpenAIShape(t *testing.T) {
+	server, classifierCalls, upstreamCalls := testServer(t, classifierOK("easy", "miss", 1),
+		func(w http.ResponseWriter, r *http.Request) { t.Fatal("provider must not be called") })
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("WWW-Authenticate") != `Bearer realm="smr"` {
+		t.Fatalf("challenge=%q", rec.Header().Get("WWW-Authenticate"))
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"authentication_error"`) {
+		t.Fatalf("OpenAI error shape missing: %s", rec.Body.String())
+	}
+	if classifierCalls.Load() != 0 || upstreamCalls.Load() != 0 {
+		t.Fatalf("classifier=%d upstream=%d", classifierCalls.Load(), upstreamCalls.Load())
+	}
+}
+
+func TestMessagesMissingKeyUsesAnthropicShape(t *testing.T) {
+	server, _, _ := testServer(t, classifierOK("easy", "miss", 1), func(w http.ResponseWriter, r *http.Request) {})
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"messages":[]}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"type":"authentication_error"`) {
+		t.Fatalf("Anthropic error shape missing: %s", rec.Body.String())
+	}
+}
+
+func TestXAPIKeyIsAccepted(t *testing.T) {
+	var models []any
+	server, _, upstreamCalls := testServer(t, classifierOK("easy", "miss", 0), func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		_ = json.Unmarshal(body, &payload)
+		models = append(models, payload["model"])
+		_, _ = w.Write([]byte(`{}`))
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	req.Header.Set("x-api-key", testAccessKey)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || upstreamCalls.Load() != 1 || len(models) != 1 {
+		t.Fatalf("status=%d upstream=%d models=%v body=%s", rec.Code, upstreamCalls.Load(), models, rec.Body.String())
+	}
+}
+
+func TestRevokedKeyStopsWorkingWithoutRestart(t *testing.T) {
+	server, _, upstreamCalls := testServer(t, classifierOK("easy", "miss", 0),
+		func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	cfg := server.manager.Snapshot()
+	cfg.RemoveAccessKey("test-device")
+	if err := server.manager.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+	req := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || upstreamCalls.Load() != 0 {
+		t.Fatalf("status=%d upstream=%d", rec.Code, upstreamCalls.Load())
+	}
+}
+
+func TestStatsReportsKeyUsage(t *testing.T) {
+	server, _, _ := testServer(t, classifierOK("easy", "miss", 1),
+		func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	first := accessRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	server.Handler().ServeHTTP(httptest.NewRecorder(), first)
+
+	req := accessRequest(http.MethodGet, "/stats", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"test-device"`) ||
+		!strings.Contains(rec.Body.String(), `"requests":1`) {
+		t.Fatalf("stats do not count the key: %s", rec.Body.String())
 	}
 }
