@@ -178,6 +178,70 @@
 </div>
 </form>
 
+<section class="card" id="access">
+  <div class="card-head">
+    <span class="num" aria-hidden="true">+</span>
+    <div class="card-title">
+      <h2>{{t .Lang "access.title"}}</h2>
+      <p class="muted">{{t .Lang "access.desc"}}</p>
+    </div>
+    {{if .AccessKeyMissing}}<span class="pill">{{t .Lang "access.missing"}}</span>{{else}}<span class="pill ok">{{tf .Lang "access.count" (len .AccessKeys)}}</span>{{end}}
+  </div>
+
+  {{if not .ListenIsLAN}}
+  <div class="notice warn" role="note">{{t .Lang "access.loopback"}} <span class="mono">listen: 0.0.0.0:8787</span></div>
+  {{end}}
+  {{if .AccessKeyMissing}}
+  <div class="notice warn" role="note">{{t .Lang "access.no_key"}} <span class="mono">smr keys add local</span></div>
+  {{end}}
+
+  {{if .NewAccessKey}}
+  <div class="notice ok" role="status">
+    <strong>{{tf .Lang "access.created" .NewAccessKey.Name}}</strong>
+    <div class="snippet">
+      <div class="snippet-head">
+        <span>{{t .Lang "access.key_value"}}</span>
+        <button class="btn" type="button" data-copy="{{.NewAccessKey.Key}}" data-copied="{{t .Lang "step3.copied"}}">{{t .Lang "step3.copy"}}</button>
+      </div>
+      <pre>{{.NewAccessKey.Key}}</pre>
+    </div>
+    <p class="hint">{{t .Lang "access.created_hint"}} <span class="mono">{{.NewAccessKey.AdvertiseURL}}</span></p>
+  </div>
+  {{end}}
+
+  <div class="keys-table">
+    <div class="keys-head" aria-hidden="true">
+      <span>{{t .Lang "access.col_device"}}</span>
+      <span>{{t .Lang "access.col_created"}}</span>
+      <span>{{t .Lang "access.col_requests"}}</span>
+      <span>{{t .Lang "access.col_last"}}</span>
+      <span></span>
+    </div>
+    {{range .AccessKeys}}
+    <div class="keys-row">
+      <span><strong>{{.Name}}</strong><small class="mono">{{.Hint}}</small></span>
+      <span class="small">{{.CreatedAt}}</span>
+      <span>{{.Requests}}</span>
+      <span class="small">{{.LastSeenAt}}</span>
+      <form method="post" action="/access/revoke">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="name" value="{{.Name}}">
+        <button class="btn" type="submit">{{t $.Lang "access.revoke"}}</button>
+      </form>
+    </div>
+    {{end}}
+  </div>
+  {{if not .AccessKeys}}<p class="hint">{{t .Lang "access.empty"}}</p>{{end}}
+
+  <form class="access-add" method="post" action="/access/add">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>{{t .Lang "access.add_label"}}
+      <input name="name" required maxlength="64" autocomplete="off" placeholder="{{t .Lang "access.add_placeholder"}}">
+    </label>
+    <button class="btn primary" type="submit">{{t .Lang "access.add"}}</button>
+  </form>
+  <p class="hint">{{t .Lang "access.http_warning"}}</p>
+</section>
 <section class="card" id="step-3">
   <div class="card-head">
     <span class="num" aria-hidden="true">3</span>

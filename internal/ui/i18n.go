@@ -84,13 +84,43 @@ var messages = map[string]message{
 		"Đừng dán lẫn dòng model_provider vào trong bảng; TOML sẽ hiểu nó là khóa của bảng cuối cùng. SMR không tự sửa file; bạn tự quyết định có đặt SMR làm mặc định hay không.",
 		"Do not paste the model_provider line inside a table; TOML would read it as a key of that table. SMR never edits the file; you decide whether to make SMR the default.",
 	},
+	"step3.codex.env": {
+		"Đặt biến môi trường trên máy sẽ chạy Codex. `setx` chỉ có tác dụng ở cửa sổ terminal mới:",
+		"Set the environment variable on the machine that runs Codex. `setx` only affects a new terminal window:",
+	},
 	"step3.claude.block": {
 		"Dán 2 dòng này vào object env trong settings.json. Thêm dấu phẩy sau dòng phía trên nếu cần; đừng thay cả file:",
 		"Paste these two lines into the env object in settings.json. Add a comma after the previous line if needed; do not replace the file:",
 	},
 	"step3.claude.note": {
-		"ANTHROPIC_AUTH_TOKEN ở đây chỉ là placeholder; SMR thay bằng key của profile Claude khi forward. Nếu file đang có ANTHROPIC_API_KEY thì giữ hoặc bỏ đều được, SMR không dùng giá trị đó. Khởi động lại Claude Code sau khi sửa.",
-		"ANTHROPIC_AUTH_TOKEN here is only a placeholder; SMR replaces it with the Claude profile key when forwarding. If the file also has ANTHROPIC_API_KEY, keep it or remove it; SMR does not use that value. Restart Claude Code after the edit.",
+		"ANTHROPIC_AUTH_TOKEN là access key thật của thiết bị này; SMR kiểm tra nó trước khi forward. Nếu file đang có ANTHROPIC_API_KEY thì có thể giữ hoặc bỏ, SMR chấp nhận cả hai header. Khởi động lại Claude Code sau khi sửa.",
+		"ANTHROPIC_AUTH_TOKEN is this device's real access key; SMR checks it before forwarding. If the file also has ANTHROPIC_API_KEY, keep it or remove it, SMR accepts either header. Restart Claude Code after the edit.",
+	},
+
+	"access.title": {"Thiết bị truy cập", "Device access"},
+	"access.desc": {
+		"Mỗi thiết bị trong mạng nội bộ cần một access key. Mọi request tới proxy đều phải có key, kể cả từ chính máy này.",
+		"Every device on the local network needs an access key. Every proxy request must carry one, including requests from this machine.",
+	},
+	"access.missing":         {"Chưa có key", "No key yet"},
+	"access.count":           {"%d thiết bị", "%d devices"},
+	"access.loopback":        {"Proxy đang chỉ nghe loopback. Đổi thành", "The proxy is loopback-only. Change it to"},
+	"access.no_key":          {"Chưa có access key nào. Tạo một key tên local bằng", "No access key yet. Create one named local with"},
+	"access.created":         {"Đã thêm thiết bị %s. Key đầy đủ chỉ hiện lần này.", "Device %s added. The full key is shown only now."},
+	"access.key_value":       {"Access key", "Access key"},
+	"access.created_hint":    {"Trên thiết bị kia, dùng base URL", "On the other device, use the base URL"},
+	"access.col_device":      {"Thiết bị", "Device"},
+	"access.col_created":     {"Ngày tạo", "Created"},
+	"access.col_requests":    {"Request", "Requests"},
+	"access.col_last":        {"Dùng lần cuối", "Last used"},
+	"access.revoke":          {"Thu hồi", "Revoke"},
+	"access.empty":           {"Chưa có thiết bị nào.", "No devices yet."},
+	"access.add_label":       {"Tên thiết bị", "Device name"},
+	"access.add_placeholder": {"may-cua-vo", "wife-laptop"},
+	"access.add":             {"Thêm thiết bị", "Add device"},
+	"access.http_warning": {
+		"Truy cập LAN dùng HTTP không mã hoá: access key và prompt đi dạng rõ. Chỉ dùng trong mạng tin cậy, hoặc bọc bằng Tailscale/WireGuard.",
+		"LAN access uses plain HTTP: access keys and prompts travel in clear text. Use it only on a trusted network, or wrap it in Tailscale/WireGuard.",
 	},
 
 	"step4.before":   {"Mở agent, gửi một câu hỏi, rồi quay lại đây. Header", "Open the agent, send one prompt, then come back here. The header"},
@@ -115,8 +145,8 @@ var messages = map[string]message{
 	"step4.config_file": {"File cấu hình:", "Config file:"},
 	"step4.readable":    {"chỉ user hiện tại đọc được", "readable by the current user only"},
 
-	"footer.loopback": {"Chỉ bind loopback. Kết nối LAN bị từ chối.", "Bound to loopback only; LAN connections are refused."},
-	"footer.no_log":   {"Không log prompt, API key hoặc token.", "Never logs prompts, API keys or tokens."},
+	"footer.loopback": {"Trang cấu hình chỉ nghe loopback. Proxy yêu cầu access key cho mọi request.", "The setup page is loopback-only. The proxy requires an access key for every request."},
+	"footer.no_log":   {"Không log prompt hay API key của provider. Access key chỉ được ghi một lần khi vừa tạo.", "Never logs prompts or provider API keys. An access key is written once, when it is created."},
 
 	"locked.title":    {"Cần mã truy cập", "Access token required"},
 	"locked.lead":     {"SMR chỉ mở trang cấu hình qua lệnh trong terminal. Nhờ vậy một trang web khác không thể đổi cấu hình hay đọc API key trên máy bạn.", "SMR opens this page only from a terminal command. That keeps other websites from changing your config or reading the API key on this machine."},
@@ -139,8 +169,10 @@ var messages = map[string]message{
 	"placeholder.none":      {"Chưa có", "Not set"},
 	"placeholder.saved":     {"Đã lưu", "Saved"},
 
-	"notice.saved":     {"Đã lưu cấu hình. Daemon dùng cấu hình mới cho request tiếp theo.", "Configuration saved. The daemon uses it for the next request."},
-	"notice.saved_env": {"Đã lưu vào file, nhưng biến môi trường ACMEAI_API_KEY/ACMEAI_BASE_URL vẫn đang override khi daemon chạy.", "Saved to the file, but ACMEAI_API_KEY/ACMEAI_BASE_URL is still overriding it while the daemon runs."},
+	"notice.saved":          {"Đã lưu cấu hình. Daemon dùng cấu hình mới cho request tiếp theo.", "Configuration saved. The daemon uses it for the next request."},
+	"notice.access_added":   {"Đã thêm thiết bị %s.", "Device %s added."},
+	"notice.access_revoked": {"Đã thu hồi access key. Key ngừng hoạt động ngay.", "Access key revoked. It stops working immediately."},
+	"notice.saved_env":      {"Đã lưu vào file, nhưng biến môi trường ACMEAI_API_KEY/ACMEAI_BASE_URL vẫn đang override khi daemon chạy.", "Saved to the file, but ACMEAI_API_KEY/ACMEAI_BASE_URL is still overriding it while the daemon runs."},
 
 	"error.save":      {"Không lưu được cấu hình: %s", "Could not save the configuration: %s"},
 	"error.test_save": {"Key hợp lệ nhưng không lưu được: %s", "The key is valid but could not be saved: %s"},
@@ -148,7 +180,9 @@ var messages = map[string]message{
 		"Không đọc được cấu hình %s để hiện phần cần dán: %s. Các bước còn lại vẫn dùng được.",
 		"Could not read the %s configuration to build the blocks: %s. The other steps still work.",
 	},
-	"error.no_key": {"Chưa có API key. Dán key vào ô API key rồi kiểm tra lại.", "No API key yet. Paste one into the API key field and check again."},
+	"error.no_key":         {"Chưa có API key. Dán key vào ô API key rồi kiểm tra lại.", "No API key yet. Paste one into the API key field and check again."},
+	"error.access_missing": {"Không tìm thấy thiết bị %s.", "Device %s was not found."},
+	"error.access_last":    {"Không thể thu hồi key cuối cùng khi proxy mở ra LAN: %s", "Cannot revoke the last key while the proxy listens beyond loopback: %s"},
 	"error.invalid_key": {
 		"API key không hợp lệ hoặc đã bị thu hồi.",
 		"The API key is invalid or revoked.",

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -23,6 +24,7 @@ type Config struct {
 	ChatCompletionsProfile string             `yaml:"chat_completions_profile,omitempty" json:"chat_completions_profile"`
 	Classifier             Classifier         `yaml:"classifier" json:"classifier"`
 	Profiles               map[string]Profile `yaml:"profiles" json:"profiles"`
+	AccessKeys             []AccessKey        `yaml:"access_keys,omitempty" json:"access_keys,omitempty"`
 }
 
 type Classifier struct {
@@ -94,7 +96,7 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	applyEnv(&cfg)
-	return cfg, cfg.Validate()
+	return cfg, cfg.ValidateSchema()
 }
 
 // loadFile reads only the file. The manager keeps this view so a save never
@@ -104,7 +106,7 @@ func loadFile(path string) (Config, error) {
 	cfg := Default()
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return cfg, cfg.Validate()
+		return cfg, cfg.ValidateSchema()
 	}
 	if err != nil {
 		return cfg, fmt.Errorf("read config: %w", err)
@@ -113,7 +115,7 @@ func loadFile(path string) (Config, error) {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
 	normalize(&cfg)
-	return cfg, cfg.Validate()
+	return cfg, cfg.ValidateSchema()
 }
 
 func normalize(cfg *Config) {
@@ -194,14 +196,22 @@ func envOverrides() (apiKey, baseURL string) {
 		strings.TrimRight(strings.TrimSpace(os.Getenv("ACMEAI_BASE_URL")), "/")
 }
 
-func (c Config) Validate() error {
-	if err := validateLoopback(c.Listen, "listen"); err != nil {
+// Validate is the full runtime check. Loading and saving use ValidateSchema so
+// a file that binds to the LAN without a key can still be opened and repaired.
+func (c Config) Validate() error { return c.ValidateRuntime() }
+
+// ValidateSchema checks everything that must be true for the file to be
+// readable and saveable. It deliberately allows a non-loopback listener with
+// no key: otherwise every command, including `smr keys add`, would fail before
+// the user could fix the file.
+func (c Config) ValidateSchema() error {
+	if err := validateAddress(c.Listen, "listen"); err != nil {
 		return err
 	}
-	if err := validateLoopback(c.UIListen, "ui_listen"); err != nil {
+	if err := validateAddress(c.UIListen, "ui_listen"); err != nil {
 		return err
 	}
-	if c.Listen == c.UIListen {
+	if SameEndpoint(c.Listen, c.UIListen) {
 		return fmt.Errorf("config: listen and ui_listen must differ")
 	}
 	if c.ChatCompletionsProfile == "" {
@@ -248,6 +258,60 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	seen := make(map[string]bool, len(c.AccessKeys))
+	for _, key := range c.AccessKeys {
+		if err := ValidateAccessKeyName(key.Name); err != nil {
+			return err
+		}
+		if seen[key.Name] {
+			return fmt.Errorf("config: access key name %q is duplicated", key.Name)
+		}
+		seen[key.Name] = true
+		if err := validateAccessKeyKey(key.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateListenerPlacement checks the parts that do not depend on the key
+// list. `serve` runs it before taking the single-instance lock, so a bad
+// ui_listen never blocks another process for the time it takes to fail.
+func (c Config) ValidateListenerPlacement() error {
+	if err := c.ValidateSchema(); err != nil {
+		return err
+	}
+	return validateLoopback(c.UIListen, "ui_listen")
+}
+
+// ValidateRuntime decides whether the daemon may start. The setup UI must stay
+// on loopback because it can change provider keys; the proxy may leave loopback
+// only when at least one access key gates every request.
+func (c Config) ValidateRuntime() error {
+	if err := c.ValidateSchema(); err != nil {
+		return err
+	}
+	if err := validateLoopback(c.UIListen, "ui_listen"); err != nil {
+		return err
+	}
+	if !isLoopbackAddr(c.Listen) && len(c.AccessKeys) == 0 {
+		return fmt.Errorf("config: listen %q is not loopback; add an access key with `smr keys add <name>`", c.Listen)
+	}
+	return nil
+}
+
+func validateAddress(addr, field string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("config: %s must be host:port: %w", field, err)
+	}
+	if host == "" {
+		return fmt.Errorf("config: %s must include a host; use 0.0.0.0 to listen on every interface", field)
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return fmt.Errorf("config: %s has an invalid port %q", field, port)
+	}
 	return nil
 }
 
@@ -285,7 +349,7 @@ func IsTier(value string) bool {
 
 // Save writes atomically with user-only permissions.
 func Save(path string, cfg Config) error {
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateSchema(); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -383,6 +447,7 @@ func (m *Manager) Update(cfg Config) error {
 
 func clone(cfg Config) Config {
 	out := cfg
+	out.AccessKeys = append([]AccessKey(nil), cfg.AccessKeys...)
 	out.Profiles = make(map[string]Profile, len(cfg.Profiles))
 	for name, profile := range cfg.Profiles {
 		copyProfile := profile

@@ -5,6 +5,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,20 +28,30 @@ import (
 const maxRequestBytes = 32 << 20
 
 type Stats struct {
-	StartedAt          time.Time `json:"started_at"`
-	Requests           int64     `json:"requests"`
-	Forwarded          int64     `json:"forwarded"`
-	ClassifierOK       int64     `json:"classifier_ok"`
-	ClassifierFallback int64     `json:"classifier_fallback"`
-	ClassifierErrors   int64     `json:"classifier_errors"`
-	CacheHits          int64     `json:"cache_hits"`
-	UpstreamErrors     int64     `json:"upstream_errors"`
-	LastTier           string    `json:"last_tier,omitempty"`
-	LastChargedVND     int64     `json:"last_charged_vnd"`
-	LastBalanceVND     int64     `json:"last_balance_vnd"`
-	LastClassifierAt   string    `json:"last_classifier_at,omitempty"`
-	LastClassifierOK   bool      `json:"last_classifier_ok"`
-	LastError          string    `json:"last_error,omitempty"`
+	StartedAt          time.Time  `json:"started_at"`
+	Requests           int64      `json:"requests"`
+	Forwarded          int64      `json:"forwarded"`
+	ClassifierOK       int64      `json:"classifier_ok"`
+	ClassifierFallback int64      `json:"classifier_fallback"`
+	ClassifierErrors   int64      `json:"classifier_errors"`
+	CacheHits          int64      `json:"cache_hits"`
+	UpstreamErrors     int64      `json:"upstream_errors"`
+	LastTier           string     `json:"last_tier,omitempty"`
+	LastChargedVND     int64      `json:"last_charged_vnd"`
+	LastBalanceVND     int64      `json:"last_balance_vnd"`
+	LastClassifierAt   string     `json:"last_classifier_at,omitempty"`
+	LastClassifierOK   bool       `json:"last_classifier_ok"`
+	LastError          string     `json:"last_error,omitempty"`
+	AuthFailures       int64      `json:"auth_failures"`
+	Keys               []KeyStats `json:"keys"`
+}
+
+// KeyStats is per-device usage. A key that is configured but has never been
+// used appears with zero requests so the setup page can list it immediately.
+type KeyStats struct {
+	Name       string `json:"name"`
+	Requests   int64  `json:"requests"`
+	LastSeenAt string `json:"last_seen_at,omitempty"`
 }
 
 type counters struct {
@@ -56,6 +69,12 @@ type counters struct {
 	lastClassifierAt atomic.Value
 	lastClassifierOK atomic.Bool
 	lastError        atomic.Value
+	authFailures     atomic.Int64
+}
+
+type keyCounter struct {
+	requests int64
+	lastSeen string
 }
 
 type Server struct {
@@ -64,6 +83,9 @@ type Server struct {
 	client  *http.Client
 	stats   counters
 	started time.Time
+
+	keyMu    sync.Mutex
+	keyStats map[string]*keyCounter
 }
 
 func New(manager *config.Manager, logger *slog.Logger) *Server {
@@ -81,10 +103,11 @@ func New(manager *config.Manager, logger *slog.Logger) *Server {
 		}).DialContext,
 	}
 	return &Server{
-		manager: manager,
-		logger:  logger,
-		client:  &http.Client{Transport: transport},
-		started: time.Now().UTC(),
+		manager:  manager,
+		logger:   logger,
+		client:   &http.Client{Transport: transport},
+		started:  time.Now().UTC(),
+		keyStats: map[string]*keyCounter{},
 	}
 }
 
@@ -98,7 +121,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/messages", s.handleMessages)
 	mux.HandleFunc("POST /v1/messages/count_tokens", s.handleCountTokens)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
-	return noStore(mux)
+	return noStore(s.withAccessKey(mux))
 }
 
 func (s *Server) Snapshot() Stats {
@@ -114,6 +137,8 @@ func (s *Server) Snapshot() Stats {
 		LastChargedVND:     s.stats.lastCharged.Load(),
 		LastBalanceVND:     s.stats.lastBalance.Load(),
 		LastClassifierOK:   s.stats.lastClassifierOK.Load(),
+		AuthFailures:       s.stats.authFailures.Load(),
+		Keys:               s.keySnapshot(),
 	}
 	if value, ok := s.stats.lastTier.Load().(string); ok {
 		stats.LastTier = value
@@ -127,18 +152,125 @@ func (s *Server) Snapshot() Stats {
 	return stats
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+type accessKeyContextKey struct{}
+
+// withAccessKey enforces one rule for every route except /health: a request
+// without a configured key never reaches a provider. The comparison walks the
+// whole list so timing does not reveal how many keys exist or which one is
+// close to the submitted value.
+func (s *Server) withAccessKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		cfg := s.manager.Snapshot()
+		candidate := accessKeyFromRequest(r)
+		name := matchAccessKey(cfg.AccessKeys, candidate)
+		if name == "" {
+			s.stats.authFailures.Add(1)
+			s.logger.Info("rejected request without a valid access key",
+				"remote", r.RemoteAddr, "path", r.URL.Path, "method", r.Method)
+			writeAuthError(w, r)
+			return
+		}
+		// /stats is authenticated but is not device traffic; counting it would
+		// make `smr keys list` bump its own "last used" value every time.
+		if r.URL.Path != "/stats" {
+			s.recordKeyUse(name)
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), accessKeyContextKey{}, name)))
+	})
+}
+
+func accessKeyFromRequest(r *http.Request) string {
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authorization != "" {
+		if len(authorization) > 7 && strings.EqualFold(authorization[:7], "bearer ") {
+			return strings.TrimSpace(authorization[7:])
+		}
+		return authorization
+	}
+	return strings.TrimSpace(r.Header.Get("x-api-key"))
+}
+
+func matchAccessKey(keys []config.AccessKey, candidate string) string {
+	matched := ""
+	if candidate == "" {
+		return ""
+	}
+	for _, key := range keys {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(key.Key)) == 1 {
+			matched = key.Name
+		}
+	}
+	return matched
+}
+
+func (s *Server) recordKeyUse(name string) {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	entry := s.keyStats[name]
+	if entry == nil {
+		entry = &keyCounter{}
+		s.keyStats[name] = entry
+	}
+	entry.requests++
+	entry.lastSeen = time.Now().UTC().Format(time.RFC3339)
+}
+
+// keySnapshot merges configured keys with counters so a newly added device
+// shows up with zero requests immediately, without waiting for its first call.
+func (s *Server) keySnapshot() []KeyStats {
 	cfg := s.manager.Snapshot()
-	stats := s.Snapshot()
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	result := make([]KeyStats, 0, len(cfg.AccessKeys)+len(s.keyStats))
+	seen := make(map[string]bool, len(cfg.AccessKeys))
+	for _, key := range cfg.AccessKeys {
+		item := KeyStats{Name: key.Name}
+		if counter, ok := s.keyStats[key.Name]; ok {
+			item.Requests = counter.requests
+			item.LastSeenAt = counter.lastSeen
+		}
+		result = append(result, item)
+		seen[key.Name] = true
+	}
+	for name, counter := range s.keyStats {
+		if seen[name] {
+			continue
+		}
+		result = append(result, KeyStats{Name: name, Requests: counter.requests, LastSeenAt: counter.lastSeen})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+func writeAuthError(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="smr"`)
+	message := "Invalid or missing SMR access key."
+	if isAnthropicPath(r.URL.Path) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"type":  "error",
+			"error": map[string]string{"type": "authentication_error", "message": message},
+		})
+		return
+	}
+	writeError(w, http.StatusUnauthorized, "authentication_error", message)
+}
+
+func isAnthropicPath(path string) bool {
+	return path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/")
+}
+
+// handleHealth is the one route that does not require a key: HealthCheck uses
+// it to tell a live daemon from a crashed one. It exposes no classifier URL or
+// balance, so an unauthenticated probe cannot learn which environment this is.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"version": "2",
-		"classifier": map[string]any{
-			"base_url":   cfg.Classifier.BaseURL,
-			"configured": cfg.Classifier.APIKey != "",
-			"last_ok":    stats.LastClassifierOK,
-			"last_at":    stats.LastClassifierAt,
-		},
+		"status":        "ok",
+		"version":       "2",
+		"auth_required": true,
 	})
 }
 

@@ -47,8 +47,14 @@ reload it:
     smr doctor
     smr status
 
-`smr doctor` must report the testing balance and four configured tiers. Send a
-request through Codex or Claude Code, then check:
+`smr doctor` must report the testing balance and four configured tiers. Every
+proxy request needs an access key; the first start creates one named `local`.
+Use `smr keys list` to see it, or `smr keys add test-device` for an explicit
+key. A manual probe looks like:
+
+    curl -H "Authorization: Bearer smr_lan_..." http://127.0.0.1:8787/v1/models
+
+Send a request through Codex or Claude Code, then check:
 
     X-SMR-Tier
     X-SMR-Cache
@@ -74,5 +80,6 @@ The matching row must appear on the testing dashboard with the same charge.
 - `smr doctor` passes against `api-testing.acmeai.vn`.
 - Codex and Claude Code both route through SMR against the testing API.
 - Dashboard totals, ledger entries, and `X-SMR-Charged-VND` agree.
-- No raw prompt, API key, or provider credential appears in `smr logs`.
+- No raw prompt, provider API key, or OAuth token appears in `smr logs`. The
+  access key is written once when it is created, and the file is user-only.
 

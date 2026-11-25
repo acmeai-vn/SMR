@@ -255,6 +255,15 @@ Add the provider block and, separately, the default provider key:
     name = "Smart Model Router"
     base_url = "http://127.0.0.1:8787/v1"
     wire_api = "responses"
+    env_key = "SMR_API_KEY"
+
+Then set the environment variable to the access key shown in **Device access**:
+
+    # Windows (PowerShell), then open a new terminal
+    setx SMR_API_KEY "smr_lan_..."
+
+    # macOS / Linux
+    export SMR_API_KEY="smr_lan_..."
 
 Put `model_provider = "smr"` at the top of the file, before any `[table]`.
 TOML reads a top-level key that appears after a table as part of that table, so
@@ -267,13 +276,35 @@ Add these two entries to the existing `env` object in `settings.json`; do not
 replace the whole file:
 
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
-    "ANTHROPIC_AUTH_TOKEN": "smr-local-placeholder"
+    "ANTHROPIC_AUTH_TOKEN": "smr_lan_..."
 
-The placeholder is not a secret. SMR replaces it with the Claude profile key
-when forwarding the request. Restart Claude Code after the edit.
+`ANTHROPIC_AUTH_TOKEN` is the device's access key, not a provider key. SMR
+checks it before forwarding and then replaces the upstream credential with the
+Claude profile key. Restart Claude Code after the edit.
 
 If you only configure one host, SMR still runs and that host can use it.
 
+## Use SMR from another device
+
+SMR listens on loopback by default. To share it with a phone, laptop or another
+machine on the same network:
+
+1. Create a key for the device: `smr keys add phone`. The command prints the
+   full key once and the configuration blocks for that device.
+2. Set `listen: "0.0.0.0:8787"` in the SMR config. Leave `ui_listen` on
+   loopback. Restart with `smr restart`.
+3. Run `smr keys list` to see the address to use, for example
+   `advertise: http://192.168.1.20:8787`.
+4. On the other device, paste that address into its Codex or Claude Code config
+   and set the access key from step 1.
+
+Every request to the proxy needs a key, including requests from the machine
+that runs SMR. The setup page and `smr keys` are the only supported writers of
+`access_keys`; do not edit the file while the daemon is running.
+
+Windows Firewall asks for permission the first time SMR binds to a non-loopback
+address. Allow the **Private** profile only. LAN traffic is plain HTTP: access
+keys and prompts are visible on the wire, so use a trusted network or a VPN.
 ## Configuration
 
 ### Testing environment
@@ -307,6 +338,12 @@ A complete, commented example is in `config.example.yaml`. Minimal shape:
     listen: "127.0.0.1:8787"
     ui_listen: "127.0.0.1:8788"
 
+    # Created by `smr serve` on first start, or with `smr keys add <name>`.
+    access_keys:
+      - name: local
+        key: "smr_lan_..."
+        created_at: "2026-11-25T00:00:00Z"
+
     classifier:
       base_url: "https://api.acmeai.vn"
       api_key: ""                 # or ACMEAI_API_KEY
@@ -338,7 +375,16 @@ A complete, commented example is in `config.example.yaml`. Minimal shape:
 
 Configuration rules:
 
-- SMR binds only to loopback. It refuses to start on a public interface.
+- SMR binds to loopback by default. To let another device on your network use
+  it, set `listen: "0.0.0.0:8787"`. The daemon refuses to start on a
+  non-loopback address unless at least one `access_keys` entry exists.
+  `ui_listen` must stay on loopback because the setup page can change provider
+  credentials.
+- Every proxy request needs an access key, including requests from the machine
+  that runs SMR. Send it as `Authorization: Bearer smr_lan_...` or
+  `x-api-key: smr_lan_...`. `GET /health` is the only unauthenticated route.
+- Use `smr keys add <name>` to create a device key and `smr keys revoke <name>`
+  to revoke it. Changes take effect immediately while the daemon is running.
 - Config files are readable only by the current user. On Windows SMR resets the ACL with `icacls` and grants the current user because `chmod` does not change Windows ACLs.
 - `ACMEAI_API_KEY` overrides `classifier.api_key`.
 - `max_chars` must not exceed the server limit returned by `GET /v1/account`.
@@ -411,8 +457,13 @@ you want to stop routing through SMR.
 - SMR sends only one representative text to `api.acmeai.vn`.
 - The server stores a hash, tier, token count, price, and timestamps; it does not store the raw text.
 - Provider credentials are stored locally and sent only to the configured provider. The ACME AI key authenticates requests to the classifier.
-- SMR never logs raw prompts, API keys, or OAuth tokens.
-- The local UI binds only to loopback and requires a one-time token.
+- SMR never logs raw prompts, provider API keys, or OAuth tokens. A newly
+  created access key is written once to the local log so you can recover it if
+  the setup page is unavailable; the file is readable only by your account.
+- The proxy requires an access key on every request. The local UI still binds
+  only to loopback and requires a one-time token.
+- LAN access uses plain HTTP. Access keys and prompts are not encrypted on the
+  wire; use a trusted private network or wrap SMR in Tailscale/WireGuard.
 - On Windows, SMR configuration and token files receive an explicit current-user-only ACL. On macOS and Linux they use `0600`/`0700` permissions.
 - Source code is available under Apache-2.0.
 

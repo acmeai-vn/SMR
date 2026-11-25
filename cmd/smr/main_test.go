@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,14 @@ func TestRunServeSecondInstanceKeepsToken(t *testing.T) {
 
 	if err := waitForHealth(context.Background(), "http://"+cfg.Listen, 10*time.Second); err != nil {
 		t.Fatalf("daemon never became healthy: %v", err)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, ok := loaded.LocalAccessKey()
+	if !ok || local.Name != "local" || !strings.HasPrefix(local.Key, config.AccessKeyPrefix) {
+		t.Fatalf("serve did not create a local access key: %#v", loaded.AccessKeys)
 	}
 	first := tokenDigest(t, dataDir)
 
